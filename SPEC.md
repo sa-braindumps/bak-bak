@@ -1,0 +1,448 @@
+# Bak-Bak — Technical Specification
+
+> *बक-बक* — Hindi for chattering. A Mac-native, bring-your-own-key voice dictation app whose one differentiator is that **your corrections persist and compound.**
+
+This document specifies the behavior of **v0.1**. It is the contract: if the shipped binary disagrees with this document, one of them is a bug. Decisions are stated with their reasons so contributors can tell intentional constraints from accidental ones.
+
+- For *why the system is shaped this way*, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+- For *what ships when*, see [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+- For *how to build and contribute*, see [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md).
+
+---
+
+## 1. Overview
+
+Bak-Bak is a native macOS (13+) menu-bar app and CLI built around a single loop: hold the `⌥` key, speak, release, and your words appear at the cursor in whatever app is focused. Audio is captured in memory and sent to the OpenAI Whisper API (your key, no SDK, no word limits). Before the transcript is injected, Bak-Bak runs a **deterministic, case-insensitive string substitution** from a plain-text vocabulary file (`~/.bak-bak/profile.toml`) — so terms you have taught it once (your jargon, coworkers' names, `kubectl`) are always corrected. When Whisper mishears a *new* word, you fix it **by voice** ("no, X is Y"); the correction is written to that same file with a timestamp comment, the on-screen text is rewritten in place, and from then on the term is auto-corrected forever. No ML training, no hidden state, no cloud copy — just a config file the user owns, growing with use.
+
+---
+
+## 2. Core architecture
+
+### 2.1 Component diagram
+
+```
+                          ┌──────────────────────────────────────────┐
+                          │                  bak-bak                   │
+                          │            (single Swift binary)           │
+                          └──────────────────────────────────────────┘
+                                  │                         │
+                  app mode (NSApplication)          cli mode (ArgumentParser)
+                                  │                         │
+   ┌──────────────────────────────┴───────────┐   ┌─────────┴───────────────────┐
+   │              Sources/App                  │   │         Sources/CLI         │
+   │  ┌─────────────┐   ┌──────────────────┐   │   │  setup · doctor · vocab     │
+   │  │ HotkeyMonitor│  │  StatusItem (4 st)│   │   │  (drives Pipeline + TOML)   │
+   │  │ CGEvent/NSEv │  │  NSStatusItem     │   │   └─────────────────────────────┘
+   │  └──────┬──────┘   └─────────▲────────┘   │                 │
+   │         │ press/release       │ state      │                 │
+   │  ┌──────▼─────────────────────┴────────┐   │                 │
+   │  │       CorrectionController            │   │                 │
+   │  │  (10s window, grammar match, rewrite) │   │                 │
+   │  └──────┬───────────────────────▲───────┘   │                 │
+   └─────────┼───────────────────────┼───────────┘                 │
+             │ run()                  │ result                      │
+   ┌─────────▼───────────────────────┴──────────────────────────────▼────────┐
+   │                            Sources/Pipeline                              │
+   │                                                                          │
+   │   AudioRecorder  ─▶  Transcriber  ─▶  Substitutor  ─▶  Injector          │
+   │   (AVAudioEngine,    (URLSession,      (TOML [vocab],   (AXUIElement /    │
+   │    RAM buffer)        multipart        case-insensitive  CGEvent keys /   │
+   │                       Whisper API)      replace)          NSPasteboard)   │
+   │                                              ▲                            │
+   └──────────────────────────────────────────────┼───────────────────────────┘
+                                                  │ read/write
+                                       ┌──────────▼───────────┐
+                                       │  ProfileStore (TOMLKit│
+                                       │  comment-preserving)  │
+                                       │  ~/.bak-bak/profile.toml
+                                       └──────────────────────┘
+```
+
+### 2.2 Primary data flow (the core loop)
+
+```
+1. ⌥ keyDown           → HotkeyMonitor → StatusItem: recording (red dot)
+2. AVAudioEngine        → audio frames appended to in-RAM buffer
+3. ⌥ keyUp             → HotkeyMonitor → stop capture, flush buffer
+4. StatusItem: transcribing (pulse)
+5. buffer → Transcriber → multipart POST → OpenAI Whisper → raw text
+6. raw text → Substitutor (applies [vocab] map) → corrected text
+7. corrected text → Injector → keystrokes at cursor (or clipboard fallback)
+8. StatusItem: idle (dim mic)
+9. CorrectionController opens a 10s window listening for a correction utterance
+```
+
+The audio buffer never touches disk. The only network call is step 5. See [§9 Privacy guarantees](#9-privacy-guarantees).
+
+---
+
+## 3. Feature specification (v0.1)
+
+Each feature lists **Behavior**, **Edge cases**, and **Failure modes**. The differentiator is §3.3 + §3.4; everything else exists to make those two work.
+
+### 3.1 Hold-to-record hotkey
+
+**Behavior.** Holding `⌥` (Option, configurable via `[hotkey].trigger`) starts recording. The menu bar shows the recording state while the key is held. Releasing `⌥` stops recording and begins transcription. This is a *hold-and-release* gesture — not a toggle — so the user always knows recording is active because their finger is on the key.
+
+**Edge cases.**
+- **Tap with no speech.** A keyDown/keyUp with a buffer shorter than ~300 ms is discarded silently — no API call, no error. Prevents accidental empty Whisper requests when `⌥` is used for its normal OS purpose.
+- **`⌥` used in another shortcut.** Bak-Bak detects modifier-only press/release. If `⌥` is pressed *together with another key* (e.g. `⌥→` to move by word), it is not treated as a recording gesture — the combined event passes through untouched.
+- **Key held across app switch.** Recording continues; the transcript is injected wherever the cursor lands on release. (The user chose where to release.)
+- **Key held very long.** No artificial cap in v0.1, but the RAM buffer is monitored; see Failure modes.
+
+**Failure modes.**
+- **Modifier-only detection proves flaky on some keyboards/layouts.** Documented fallback: a small Carbon `RegisterEventHotKey` registration. This is a last resort — the primary path is `CGEvent` tap + `NSEvent` global monitor.
+- **Buffer grows beyond a safe RAM ceiling** (very long dictation): recording stops, error state shown with reason "recording too long", buffer flushed and transcribed up to that point. No crash, no disk spill.
+
+### 3.2 Transcription (OpenAI Whisper API)
+
+**Behavior.** On key release, the in-memory audio buffer is encoded and uploaded via a single multipart `URLSession` POST to the OpenAI Whisper endpoint, using the one API key from setup. No SDK. The round-trip latency is measured and stored for `bak-bak doctor`.
+
+**Edge cases.**
+- **No network.** Error state, reason "no network"; audio buffer discarded (never retried to disk).
+- **Slow response.** The transcribing state (pulse) persists for the full round-trip. A request timeout (default 30 s) trips the error state with reason "transcription timed out".
+- **Empty transcript returned.** Treated as a no-op — nothing injected, return to idle. No error (Whisper legitimately returns empty for silence/noise).
+
+**Failure modes.**
+- **401 invalid/expired key** → error state, reason "API key rejected"; suggests `bak-bak setup`.
+- **429 rate limit / quota** → error state, reason "rate limited or out of quota".
+- **5xx** → error state, reason "Whisper API error (5xx)". No automatic retry in v0.1 (avoids silently double-charging the user's key).
+
+### 3.3 Deterministic vocabulary substitution — *the substitution layer*
+
+**Behavior.** Before injection, the raw transcript passes through `Substitutor`, which applies every entry in `[vocab]` as a **case-insensitive whole-token string replacement**. Given `"cube cuttle" = "kubectl"`, the transcript `"run Cube Cuttle get pods"` becomes `"run kubectl get pods"`. This is the **guarantee** at the heart of the product: it is plain string replacement, not a hint to a model.
+
+**Why deterministic replace and not Whisper `initial_prompt`.** Whisper's `initial_prompt` (prompt-priming) is best-effort and version-fragile — the same prompt yields different results across model versions and offers no guarantee a term is corrected. The flywheel is only worth shipping if a taught term is corrected *every time*. A deterministic replace from a file the user owns is that guarantee. Prompt-priming returns as an *optimization layer on top of* substitution in v0.2 (see [ROADMAP](./docs/ROADMAP.md)), never as a replacement for it.
+
+**Matching rules.**
+- Case-insensitive on the "heard" key; the "intended" value is inserted verbatim (preserves `kubectl` lowercase, `Nginx` capitalization).
+- Matches respect token/word boundaries so `"nicks"` does not corrupt `"picnicks"`. Multi-word keys (`"cube cuttle"`) match across the space.
+- Substitutions are applied longest-key-first so a longer phrase wins over a shorter overlapping one.
+- The map is read fresh from `profile.toml` per transcription, so `bak-bak vocab add` and hand edits take effect on the very next dictation with no restart.
+
+**Edge cases.**
+- **Empty `[vocab]`** → transcript passes through unchanged.
+- **Duplicate keys in the file** → last definition wins (TOML semantics); `bak-bak doctor` does not flag this in v0.1.
+- **Key equals value** (no-op entry) → harmless, left in place.
+
+**Failure modes.**
+- **`profile.toml` malformed/unparseable** → substitution is skipped (raw transcript injected so the user is never blocked from dictating), and the error state shows reason "profile.toml unreadable — run bak-bak doctor". Dictation must never be held hostage by a bad config.
+
+### 3.4 Voice correction — *the headline feature* (shipped as documented beta)
+
+See [§7 Voice correction specification](#7-voice-correction-specification) for the full grammar, window, and rewrite mechanics. Summary:
+
+**Behavior.** Immediately after any injection, a **10-second correction window** (`[correction].correction_window_secs`, default 10) opens. If the user's next utterance matches one of three correction grammars ("no, X is Y" / "correction: X is Y" / "actually X is Y"), Bak-Bak: (a) writes `X = Y` to `[vocab]` with a timestamp comment, then (b) rewrites the just-injected text in place via **backspace-delete + retype**. If the next utterance does not match a correction grammar, it is treated as a brand-new normal dictation — there is **no confirmation prompt** (a y/n loop would break the four-action setup promise and the "just talk" feel).
+
+**The beta caveat (state it plainly to users).** *Voice correction is beta. The vocabulary always learns; in-place re-injection fidelity varies by app.* The flywheel — "the **next** dictation is correct" — is always true, because it depends only on the `[vocab]` write (§3.3), which is deterministic. The in-place rewrite of the *current* text is the part that can vary by app, and its failure never costs the user the learned correction.
+
+### 3.5 Text injection at cursor
+
+**Behavior.** Corrected text is inserted at the focused element using `AXUIElement` (`ApplicationServices`). When Accessibility permission is **denied**, Bak-Bak falls back to placing the text on the clipboard via `NSPasteboard` and the menu bar explicitly reports **"copied to clipboard"** (so the user is never left wondering why nothing appeared at the cursor).
+
+**Edge cases.**
+- **No focused text element** (e.g. focus on a non-text control) → clipboard fallback with the same explicit menu-bar message.
+- **Secure input field** (password fields with secure event input) → clipboard fallback; secure fields refuse synthesized input by OS design.
+
+**Failure modes.**
+- **AX insertion partially succeeds** in a quirky app → this is exactly why the *correction* path uses backspace+retype rather than AXValue (see [§7.4](#74-in-place-rewrite-mechanics)).
+- **Accessibility revoked mid-session** → next injection detects denial and switches to clipboard fallback; no crash.
+
+### 3.6 Menu bar (4 states)
+
+Specified fully in [§6](#6-menu-bar-specification). Exactly four states — idle, recording, transcribing, error. There is deliberately **no fifth "learned" state**: the on-screen text rewrite *is* the feedback that a correction happened.
+
+### 3.7 CLI commands
+
+Specified fully in [§4](#4-cli-specification). Exactly four command groups in v0.1: `setup`, `doctor`, `vocab add`, `vocab list`. The app and CLI are the same binary.
+
+---
+
+## 4. CLI specification
+
+The CLI is built with Apple's `ArgumentParser`. All commands operate on `~/.bak-bak/profile.toml`. `--help` is provided free by ArgumentParser for every subcommand.
+
+### 4.1 `bak-bak setup`
+
+A linear, **exactly-four-action** flow. It must not balloon into a wizard — four steps, in order, stopping on failure.
+
+| # | Action | Behavior | On failure |
+|---|--------|----------|------------|
+| 1 | **Paste key** | Prompt for the OpenAI API key (input not echoed). | — |
+| 2 | **Live validate** | Make one minimal authenticated call to confirm the key works. | **Stop. Do not advance.** Print "API key rejected" and exit non-zero. |
+| 3 | **Confirm hotkey** | Show the default (`⌥`), accept an override, write `[hotkey].trigger`. | Re-prompt once, then keep default. |
+| 4 | **Grant Accessibility** | Open the Accessibility pane and **poll until permission is detected**. | Print the right-click-Open / Accessibility instructions; keep polling until granted or user quits. |
+
+**Rules.**
+- The order is fixed. Step 2 is a hard gate: a bad key stops the flow so the user never proceeds to a half-working install.
+- On first success, writes a fresh `profile.toml` with the commented example vocabulary (see [§5.6](#56-default-file)).
+- Output also prints the **unsigned-build workaround** (right-click → Open) so the user has it even if they missed it in the README.
+
+**Output (success, abridged):**
+```
+bak-bak setup
+  [1/4] API key ......... pasted
+  [2/4] Validating ...... ok (gpt key accepted)
+  [3/4] Hotkey .......... ⌥ Option   (press enter to keep)
+  [4/4] Accessibility ... waiting… granted ✓
+
+Setup complete. Hold ⌥ anywhere and start talking.
+Note: first launch may say "can't be opened" — right-click the app → Open.
+```
+
+### 4.2 `bak-bak doctor`
+
+Prints a diagnostic checklist. Read-only; never modifies the profile. Exit code is non-zero if any required check fails.
+
+Reports, in order:
+1. **Mic access** — granted / denied
+2. **Accessibility** — granted / denied (clipboard-fallback note if denied)
+3. **Key validity** — one live check, ok / rejected
+4. **Hotkey registration** — registered / failed (and which trigger)
+5. **Last transcription latency** — in **ms** (or "none yet")
+6. **Vocab entry count** — number of `[vocab]` entries
+7. **Last 5 corrections** — parsed from the `# learned <timestamp>` comments in `profile.toml`
+
+**Output (example):**
+```
+bak-bak doctor
+  mic access ............ granted
+  accessibility ......... denied  (text will go to clipboard)
+  api key ............... ok
+  hotkey ................ registered (⌥ option)
+  last latency .......... 812 ms
+  vocab entries ......... 14
+  recent corrections:
+    2026-06-08T10:23:11Z  cube cuttle → kubectl
+    2026-06-07T19:02:40Z  nicks → Nginx
+    ...
+```
+
+### 4.3 `bak-bak vocab add "<heard>" "<intended>"`
+
+Appends `"<heard>" = "<intended>"` to `[vocab]` in `profile.toml`. Two positional arguments, both required, both quoted (they may contain spaces).
+
+- Comment-preserving write (TOMLKit) so existing learned-correction comments survive.
+- If `<heard>` already exists, the value is updated in place and a `# updated <timestamp>` comment is added.
+- Takes effect on the next dictation; no restart.
+
+**Output:** `added: "cube cuttle" → "kubectl"`
+
+### 4.4 `bak-bak vocab list`
+
+Pretty-prints the current `[vocab]` table aligned in two columns. Read-only.
+
+**Output:**
+```
+heard          intended
+─────────────  ────────
+cube cuttle    kubectl
+nicks          Nginx
+rack bak       Bak-Bak
+```
+
+This command is the proof that there is **no hidden state** — what the app knows is exactly what this prints, which is exactly what is in the file.
+
+---
+
+## 5. `profile.toml` specification
+
+Location: `~/.bak-bak/profile.toml`. Format: TOML, edited via a **comment-preserving** writer (TOMLKit). Every key below is documented with type, default, and constraints.
+
+### 5.1 `[vocab]`
+
+| Key form | Type | Default | Constraints |
+|----------|------|---------|-------------|
+| `"<heard>" = "<intended>"` | string → string | `{}` (empty) | Keys matched case-insensitively, longest-first, on token boundaries. Values inserted verbatim. Learned entries are preceded by a `# learned <ISO-8601-Z>` comment. |
+
+### 5.2 `[style]`
+
+| Key | Type | Default | Constraints |
+|-----|------|---------|-------------|
+| `seed` | multi-line string | absent | **Not consumed in v0.1.** Reserved for the v0.3 LLM-cleanup layer (style-seeded system prompt). Present in the file as documentation of intent; ignored by the pipeline until v0.3. |
+
+### 5.3 `[hotkey]`
+
+| Key | Type | Default | Constraints |
+|-----|------|---------|-------------|
+| `trigger` | string | `"option"` | One of the modifier identifiers (`"option"`, etc.). Read at launch; changing it requires a relaunch in v0.1. |
+
+### 5.4 `[correction]`
+
+| Key | Type | Default | Constraints |
+|-----|------|---------|-------------|
+| `correction_window_secs` | integer | `10` | The named constant for the voice-correction window. Configurable so power users can shorten/lengthen it. `0` disables voice correction (vocabulary still applies; the window simply never opens). |
+
+### 5.5 Defaults and constraints summary
+
+- A **missing file** is equivalent to: empty `[vocab]`, no `[style].seed`, `[hotkey].trigger = "option"`, `[correction].correction_window_secs = 10`. The app creates the file on first `setup`.
+- A **malformed file** does not block dictation (raw transcript is injected) and surfaces in the error state and `bak-bak doctor`.
+- **Comments are load-bearing**: the `# learned <timestamp>` comments are how `doctor` reconstructs correction history. There is no separate `corrections.log` — history lives in these comments. This is why the TOML writer **must** preserve comments.
+
+### 5.6 Default file (written by `setup`)
+
+```toml
+# ~/.bak-bak/profile.toml
+# This file is yours. Edit it, diff it, put it in git. There is no hidden state.
+
+[vocab]
+# Teach Bak-Bak a term once and it is corrected forever.
+# Format:  "what whisper heard" = "what you meant"
+# Example (uncomment or copy your own):
+# "cube cuttle" = "kubectl"
+# "nicks"       = "Nginx"
+
+[style]
+# Reserved for optional LLM cleanup (v0.3). Ignored in v0.1.
+# seed = """
+# I write in short paragraphs. I use em-dashes. I don't hedge.
+# """
+
+[hotkey]
+trigger = "option"
+
+[correction]
+correction_window_secs = 10
+```
+
+---
+
+## 6. Menu bar specification
+
+Implemented with `NSStatusItem` and four template images plus hover tooltip strings. **No animation framework** — the "pulse" is a simple alternating template image. Exactly four states; no more.
+
+| State | Icon | When | Hover text |
+|-------|------|------|------------|
+| **idle** | dim mic | default; nothing happening | `Bak-Bak — hold ⌥ to talk` |
+| **recording** | red dot | lit **while the hotkey is held** | `Recording… release ⌥ to transcribe` |
+| **transcribing** | pulsing mic | during the Whisper API round-trip | `Transcribing…` |
+| **error** | red ✗ | on any failure; auto-clears after **5 s** | the failure reason (e.g. `API key rejected`) |
+
+### 6.1 Transitions
+
+```
+idle ──(⌥ down)──▶ recording ──(⌥ up)──▶ transcribing ──(text injected)──▶ idle
+  ▲                    │                       │
+  │                    │ (tap too short)       │ (any failure)
+  └────────────────────┴───────────────────────┴──▶ error ──(5s elapsed)──▶ idle
+```
+
+- **recording** is lit for exactly as long as the key is held — it is the user's real-time confirmation that audio is being captured.
+- **error** always carries a reason on hover and always self-clears after 5 seconds back to idle.
+- There is intentionally **no "learned" state**. When a voice correction succeeds, the feedback is the text being rewritten on screen — adding a fifth icon state would be redundant noise.
+
+---
+
+## 7. Voice correction specification
+
+This is the headline feature. It is shipped as a **documented beta**: the learning is always reliable; the in-place rewrite is the part that varies by app.
+
+### 7.1 The window
+
+After any injection, `CorrectionController` opens a listening window of `[correction].correction_window_secs` seconds (default 10). During the window, the next dictation is first tested against the correction grammars before being treated as normal dictation. `correction_window_secs = 0` disables the window entirely.
+
+### 7.2 Grammar patterns
+
+Exactly three patterns are recognized in v0.1. Each captures an `X` (the heard term) and a `Y` (the intended term):
+
+| Pattern | Example utterance | Captures |
+|---------|-------------------|----------|
+| `no, X is Y` | "no, cube cuttle is kubectl" | X=`cube cuttle`, Y=`kubectl` |
+| `correction: X is Y` | "correction cube cuttle is kubectl" | X=`cube cuttle`, Y=`kubectl` |
+| `actually X is Y` | "actually nicks is Nginx" | X=`nicks`, Y=`Nginx` |
+
+Matching is case-insensitive on the leading keyword and on the connective `is`. Leading punctuation/filler ("no," / "correction:" / "actually") is stripped. Everything between the keyword and ` is ` is `X`; everything after is `Y`. (How this parser is structured so contributors can add patterns is documented in [CONTRIBUTING §7](./docs/CONTRIBUTING.md#7-how-voice-correction-grammar-patterns-are-parsed).)
+
+### 7.3 Match vs no-match behavior
+
+- **Match.**
+  1. Write `"X" = "Y"` into `[vocab]` with a `# learned <ISO-8601-Z>` comment (the durable, always-reliable part — this powers the flywheel).
+  2. Rewrite the just-injected on-screen text in place (the beta part — see §7.4).
+  3. Return to idle.
+- **No match.** The utterance is treated as a **new normal dictation** — transcribe → substitute → inject. **No confirmation loop, no y/n prompt.** Requiring confirmation would contradict the four-action setup ethos and make every dictation feel interrogated.
+
+### 7.4 In-place rewrite mechanics
+
+The rewrite uses **backspace-delete + retype**, *not* AXValue replacement:
+
+1. Compute the length of the text that was just injected (tracked by `CorrectionController` from the prior injection).
+2. Synthesize that many **backspace** keystrokes via `CGEvent` to delete the wrong text.
+3. Synthesize keystrokes to type the corrected text (raw transcript with the new `[vocab]` entry now applied).
+
+**Why backspace+retype and not AXValue.** Setting `AXValue` directly behaves differently across apps and causes artifacts in editors with vim mode, autocomplete, or custom text engines (text reordered, duplicated, or autocompletions triggered). Synthesized backspaces + typed characters are what a human would do and are universally compatible. This is the same reason §3.5's *correction* path does not reuse a naive AXValue set.
+
+### 7.5 The "focus changed" safety rule
+
+If the length of the prior injection **cannot be determined** — most commonly because focus changed between the dictation and the correction — Bak-Bak **skips the delete step entirely** and injects only the corrected text. It must **never** issue backspaces blindly, because that would eat surrounding text the user did not dictate. Losing the in-place rewrite is acceptable; eating the user's other text is not. The `[vocab]` write still happens, so the flywheel is intact regardless.
+
+### 7.6 Caveats (surface these to users verbatim)
+
+> **Voice correction is beta. The vocabulary always learns; in-place re-injection fidelity varies by app.**
+
+- The learned correction (next dictation is right) is a **guarantee**.
+- The in-place rewrite of the current text is **best-effort** and may be skipped (§7.5) or imperfect in unusual editors.
+
+---
+
+## 8. Error handling
+
+Every error funnels to the single **error** menu-bar state (red ✗, 5 s, reason on hover) and, where a CLI command is involved, to a non-zero exit with a printed reason. Audio is **never** persisted on any error path.
+
+| Error | Trigger | What the user sees | Recovery |
+|-------|---------|--------------------|----------|
+| `no network` | transcription POST fails to connect | error ✗, hover "no network" | retry by dictating again |
+| `transcription timed out` | Whisper request exceeds 30 s | error ✗, hover "transcription timed out" | retry |
+| `API key rejected` | 401 from Whisper / setup validate | error ✗ (app) or stop+exit (setup) | `bak-bak setup` |
+| `rate limited or out of quota` | 429 | error ✗, hover reason | wait / check OpenAI quota |
+| `Whisper API error (5xx)` | 5xx | error ✗, hover reason | retry later (no auto-retry) |
+| `recording too long` | RAM buffer ceiling hit | error ✗; partial audio is still transcribed | dictate in shorter bursts |
+| `profile.toml unreadable` | malformed TOML | error ✗; **raw transcript still injected** | fix file / `bak-bak doctor` |
+| `copied to clipboard` | Accessibility denied / no text target | menu bar note (not a red ✗ — it's a fallback, not a failure) | grant Accessibility for cursor injection |
+| `mic access denied` | OS mic permission missing | error ✗, hover reason | grant in System Settings; `bak-bak doctor` confirms |
+
+**Principle:** a bad config or a denied permission degrades gracefully (clipboard fallback, raw transcript) — it never blocks the user from dictating, and it never costs them a learned correction.
+
+---
+
+## 9. Privacy guarantees
+
+These are promises the architecture enforces, not aspirations.
+
+| Resource | Touches disk? | Touches network? | Stays in RAM? |
+|----------|---------------|------------------|---------------|
+| **Audio** | **Never.** Captured by `AVAudioEngine` into a RAM buffer, flushed on release, discarded after transcription (and on every error path). | Only as the multipart body of the single Whisper POST. | Yes — buffer lives in RAM and only there. |
+| **Transcript** | Not written by Bak-Bak (it is injected into whatever app you target — that app may save it; Bak-Bak does not). | Returned from the Whisper POST. | Held transiently for substitution + injection. |
+| **API key** | Stored once, locally, set up via `bak-bak setup`. | Sent only to OpenAI as the Authorization on the Whisper POST. | — |
+| **Vocabulary / corrections** | **Yes — `~/.bak-bak/profile.toml`, plain text, user-owned.** | **Never.** No cloud copy, no sync. | Read fresh per dictation. |
+
+- **No hidden state, no ML training.** Everything Bak-Bak "knows" is in `profile.toml`, which `bak-bak vocab list` prints in full.
+- **One network surface.** The Whisper POST is the only outbound call. This is deliberate — it keeps latency reporting in `doctor` trivial and makes the privacy story auditable.
+- **The "never written to disk" audio promise is structural:** `AVAudioEngine` streams to a RAM buffer; there is no code path that writes audio to a file, including error and "recording too long" paths.
+
+---
+
+## 10. Testing approach
+
+The pipeline is isolated in `Sources/Pipeline/` precisely so it can be tested independently of UI and Accessibility. See [CONTRIBUTING §6](./docs/CONTRIBUTING.md#6-testing-requirements-before-pr) for the contributor-facing checklist.
+
+### 10.1 Unit tests (no OS permissions, no network — must run in CI)
+
+- **Substitutor** — the highest-value tests, because substitution is the guarantee:
+  - case-insensitive matching; verbatim value insertion
+  - token-boundary correctness (`nicks` does not hit `picnicks`)
+  - multi-word keys; longest-key-first ordering
+  - empty/missing vocab passthrough; malformed-config passthrough (raw text injected)
+- **Correction grammar parser** — each of the three patterns; case-insensitive keyword/connective; filler/punctuation stripping; correct X/Y capture; non-matching utterances classified as normal dictation.
+- **ProfileStore (TOML)** — round-trip read/write **preserving comments**; `# learned <ts>` comment written on a learned correction; `doctor`'s "last 5 corrections" parsing from comments; malformed file handled without throwing into the dictation path.
+- **Length tracking for rewrite** — given a known prior injection, the correct backspace count is computed; "focus changed / length unknown" yields **skip-delete** (the §7.5 safety rule) rather than a guessed count.
+
+### 10.2 Integration tests (require OS permissions / a stub server)
+
+- **Transcriber** against a **stubbed Whisper endpoint**: multipart body shape, latency capture, and mapping of 401/429/5xx/timeout to the correct error reasons. Real OpenAI calls are not run in CI.
+- **Injector**: AX insertion into a known text field; clipboard fallback when Accessibility is denied (and the explicit "copied to clipboard" message). Requires Accessibility — run on a developer machine / gated CI runner, not unit CI.
+- **HotkeyMonitor**: modifier-only press/release detected; `⌥`+other-key passes through; tap-too-short discarded. Requires event-tap permission.
+- **End-to-end correction loop** (manual / scripted on a dev machine, mirrors the demo): wrong text → "no, X is Y" → in-place rewrite → repeat term → silent auto-correct → `bak-bak vocab list` shows the entry. This is the 90-second demo, used as the acceptance test for the differentiator.
+
+### 10.3 What is explicitly not tested in CI
+
+Real network calls to OpenAI, real Accessibility injection across third-party apps, and per-app rewrite fidelity (the documented-beta surface) are validated manually. CI guarantees the deterministic core (substitution, grammar parsing, TOML round-trip, length math) — i.e. the parts the flywheel guarantee depends on.
