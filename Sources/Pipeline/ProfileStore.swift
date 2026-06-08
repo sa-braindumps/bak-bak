@@ -10,15 +10,18 @@ public final class ProfileStore: @unchecked Sendable {
         public var vocab: [String: String]
         public var hotkeyTrigger: String
         public var correctionWindowSecs: Int
+        public var soundEnabled: Bool
 
         public init(
             vocab: [String: String] = [:],
             hotkeyTrigger: String = "option",
-            correctionWindowSecs: Int = 10
+            correctionWindowSecs: Int = 10,
+            soundEnabled: Bool = true
         ) {
             self.vocab = vocab
             self.hotkeyTrigger = hotkeyTrigger
             self.correctionWindowSecs = correctionWindowSecs
+            self.soundEnabled = soundEnabled
         }
     }
 
@@ -68,6 +71,10 @@ public final class ProfileStore: @unchecked Sendable {
 
         if let correction = toml["correction"]?.table {
             profile.correctionWindowSecs = correction["correction_window_secs"]?.int ?? 10
+        }
+
+        if let general = toml["general"]?.table {
+            profile.soundEnabled = general["sound_enabled"]?.bool ?? true
         }
 
         return profile
@@ -137,6 +144,28 @@ public final class ProfileStore: @unchecked Sendable {
 
         let generalTable = toml["general"]?.table ?? TOMLTable()
         generalTable["api_key"] = key
+        toml["general"] = generalTable
+
+        let output = toml.convert()
+        try output.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    public func setSoundEnabled(_ enabled: Bool) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+
+        var toml: TOMLTable
+        if fileManager.fileExists(atPath: fileURL.path) {
+            let raw = try String(contentsOf: fileURL, encoding: .utf8)
+            toml = try TOMLTable(string: raw)
+        } else {
+            toml = TOMLTable()
+        }
+
+        let generalTable = toml["general"]?.table ?? TOMLTable()
+        generalTable["sound_enabled"] = enabled
         toml["general"] = generalTable
 
         let output = toml.convert()

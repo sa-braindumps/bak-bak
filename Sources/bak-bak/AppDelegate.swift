@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: AppCoordinator!
     private var menu: NSMenu!
     private let overlay = RecordingOverlay()
+    private let profileStore = ProfileStore()
+    private var dashboard: DashboardWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -48,6 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
+        let dashboardItem = NSMenuItem(title: "Dashboard", action: #selector(showDashboard), keyEquivalent: ",")
+        dashboardItem.target = self
+        menu.addItem(dashboardItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let doctorItem = NSMenuItem(title: "Run Doctor", action: #selector(runDoctor), keyEquivalent: "d")
         doctorItem.target = self
         menu.addItem(doctorItem)
@@ -79,12 +87,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleRecordingStart() {
+        if (try? profileStore.read())?.soundEnabled != false {
+            NSSound(named: "Tink")?.play()
+        }
         coordinator.startRecording()
         updateStatusItem(state: .recording)
         overlay.show()
     }
 
     private func handleRecordingStop() {
+        if (try? profileStore.read())?.soundEnabled != false {
+            NSSound(named: "Pop")?.play()
+        }
         overlay.showTranscribing()
         coordinator.stopRecording { [weak self] result in
             switch result {
@@ -184,6 +198,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Menu Actions
+
+    @objc private func showDashboard() {
+        if dashboard == nil {
+            dashboard = DashboardWindow()
+        }
+        dashboard?.showWindow()
+    }
 
     @objc private func showAbout() {
         let alert = NSAlert()
