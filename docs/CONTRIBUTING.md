@@ -53,7 +53,6 @@ bak-bak/
 ├── Package.swift            SPM manifest. Two deps: TOMLKit, swift-argument-parser.
 ├── SPEC.md                  Behavior contract (read first).
 ├── ARCHITECTURE.md          How it fits together and why (read second).
-├── VISION.md                The pitch / positioning.
 ├── docs/
 │   ├── ROADMAP.md           What ships in v0.1 / v0.1.1 / v0.2 / v0.3 / backlog.
 │   └── CONTRIBUTING.md       This file.

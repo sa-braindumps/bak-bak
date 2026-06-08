@@ -1,3 +1,4 @@
+import AudioToolbox
 import Foundation
 
 /// Sends audio data to the OpenAI transcription API via a single multipart POST.
@@ -67,12 +68,14 @@ public final class Transcriber: @unchecked Sendable {
         body.append(Data("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".utf8))
         body.append(Data("Voice dictation.\r\n".utf8))
 
-        // Audio file — convert Float32 PCM to WAV
-        let wavData = convertToWAV(audioData)
+        // Audio file — convert Float32 PCM to FLAC (falls back to WAV on failure)
+        let audioFileData = convertToFLAC(audioData)
+        let isFlac = audioFileData != nil
+        let fileData = audioFileData ?? convertToWAV(audioData)
         body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".utf8))
-        body.append(Data("Content-Type: audio/wav\r\n\r\n".utf8))
-        body.append(wavData)
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"audio.\(isFlac ? "flac" : "wav")\"\r\n".utf8))
+        body.append(Data("Content-Type: audio/\(isFlac ? "flac" : "wav")\r\n\r\n".utf8))
+        body.append(fileData)
         body.append(Data("\r\n".utf8))
 
         // Close boundary
@@ -113,6 +116,90 @@ public final class Transcriber: @unchecked Sendable {
         default:
             throw TranscriptionError.noNetwork
         }
+    }
+
+    /// Convert raw Float32 PCM data to FLAC format using AudioToolbox.
+    /// Returns nil if FLAC encoding fails (caller should fall back to WAV).
+    private func convertToFLAC(_ pcmData: Data) -> Data? {
+        let sampleRate: Float64 = 16000
+        let channels: UInt32 = 1
+
+        // Input format: Float32 PCM (matches AudioRecorder output)
+        var inputFormat = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 4,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 4,
+            mChannelsPerFrame: channels,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+
+        // Output format: FLAC
+        var outputFormat = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatFLAC,
+            mFormatFlags: 0,
+            mBytesPerPacket: 0,
+            mFramesPerPacket: 0,
+            mBytesPerFrame: 0,
+            mChannelsPerFrame: channels,
+            mBitsPerChannel: 0,
+            mReserved: 0
+        )
+
+        // Let AudioToolbox fill in the remaining output format details
+        var propSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        AudioFormatGetProperty(kAudioFormatProperty_FormatInfo, 0, nil, &propSize, &outputFormat)
+
+        let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString + ".flac")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        // Create the output FLAC file
+        var outputFile: ExtAudioFileRef?
+        var status = ExtAudioFileCreateWithURL(
+            tempURL as CFURL,
+            kAudioFileFLACType,
+            &outputFormat,
+            nil,
+            AudioFileFlags.eraseFile.rawValue,
+            &outputFile
+        )
+        guard status == noErr, let outFile = outputFile else { return nil }
+
+        // Tell ExtAudioFile that the client data is Float32 PCM
+        status = ExtAudioFileSetProperty(
+            outFile,
+            kExtAudioFileProperty_ClientDataFormat,
+            UInt32(MemoryLayout<AudioStreamBasicDescription>.size),
+            &inputFormat
+        )
+        guard status == noErr else {
+            ExtAudioFileDispose(outFile)
+            return nil
+        }
+
+        // Write all PCM frames
+        let frameCount = UInt32(pcmData.count / MemoryLayout<Float>.size)
+        let writeStatus: OSStatus = pcmData.withUnsafeBytes { rawPtr in
+            let buffer = AudioBuffer(
+                mNumberChannels: channels,
+                mDataByteSize: UInt32(pcmData.count),
+                mData: UnsafeMutableRawPointer(mutating: rawPtr.baseAddress!)
+            )
+            var bufferList = AudioBufferList(mNumberBuffers: 1, mBuffers: buffer)
+            return ExtAudioFileWrite(outFile, frameCount, &bufferList)
+        }
+
+        // Dispose to flush all data to disk
+        ExtAudioFileDispose(outFile)
+
+        guard writeStatus == noErr else { return nil }
+        guard let flacData = try? Data(contentsOf: tempURL) else { return nil }
+        return flacData
     }
 
     /// Convert raw Float32 PCM data to WAV format.

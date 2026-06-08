@@ -17,7 +17,8 @@ let package = Package(
             dependencies: [
                 "Pipeline",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            exclude: ["Info.plist", "AppIcon.icns"]
         ),
         .target(
             name: "Pipeline",

@@ -22,17 +22,20 @@ public final class Injector: @unchecked Sendable {
         return insertViaClipboard(text)
     }
 
-    /// Place text on the clipboard and simulate Cmd+V to paste.
+    /// Place text on the clipboard, simulate Cmd+V, then restore the previous clipboard.
     private func insertViaClipboard(_ text: String) -> InjectionResult {
         let pasteboard = NSPasteboard.general
+        let previousContents = pasteboard.pasteboardItems?.compactMap { item -> (NSPasteboard.PasteboardType, Data)? in
+            guard let type = item.types.first, let data = item.data(forType: type) else { return nil }
+            return (type, data)
+        }
+
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Small delay to ensure clipboard is ready and modifier keys are released
         usleep(50_000)
 
         let source = CGEventSource(stateID: .hidSystemState)
-        // Clear any held modifier keys so the Cmd+V isn't mixed with Control+Option
         source?.setLocalEventsFilterDuringSuppressionState(.permitLocalKeyboardEvents, state: .eventSuppressionStateSuppressionInterval)
 
         let vKeyCode: CGKeyCode = 9
@@ -40,12 +43,21 @@ public final class Injector: @unchecked Sendable {
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false) else {
             return .failure("failed to create CGEvent")
         }
-        // Only Command flag — no stale Control/Option from the hotkey
         keyDown.flags = .maskCommand
         keyUp.flags = .maskCommand
         keyDown.post(tap: .cgAnnotatedSessionEventTap)
         usleep(10_000)
         keyUp.post(tap: .cgAnnotatedSessionEventTap)
+
+        // Restore previous clipboard after paste completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if let items = previousContents, !items.isEmpty {
+                pasteboard.clearContents()
+                for (type, data) in items {
+                    pasteboard.setData(data, forType: type)
+                }
+            }
+        }
 
         return .inserted
     }

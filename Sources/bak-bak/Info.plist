@@ -28,5 +28,7 @@
     <string>Bak-Bak uses speech recognition to transcribe your voice.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>

@@ -3,13 +3,22 @@ import Pipeline
 
 struct HomeView: View {
     @ObservedObject var viewModel: DashboardViewModel
+    @State private var showClearAllConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
-            StatsBar(stats: viewModel.stats)
-                .padding()
+            headerBar
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.top, AppSpacing.xl)
+                .padding(.bottom, AppSpacing.md)
 
-            Divider()
+            StatsBar(stats: viewModel.stats)
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.bottom, AppSpacing.lg)
+
+            Rectangle()
+                .fill(AppColors.divider)
+                .frame(height: 1)
 
             if viewModel.entries.isEmpty {
                 emptyState
@@ -19,43 +28,109 @@ struct HomeView: View {
                         ForEach(groupedEntries, id: \.key) { group in
                             Section {
                                 ForEach(Array(group.entries.enumerated()), id: \.offset) { _, entry in
-                                    TranscriptionRow(entry: entry)
-                                    Divider().padding(.leading, 90)
+                                    TranscriptionRow(entry: entry) {
+                                        viewModel.deleteEntry(timestamp: entry.timestamp, raw: entry.raw)
+                                    }
                                 }
                             } header: {
-                                Text(group.key)
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.secondary)
-                                    .textCase(.uppercase)
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 4)
+                                dayHeader(group.key)
                             }
                         }
                     }
-                    .padding(.bottom, 16)
+                    .padding(.bottom, AppSpacing.xxl)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "mic.badge.plus")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text("No transcriptions yet")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            Text("Hold \u{2303}\u{2325} anywhere and start talking.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Spacer()
+        .background(AppColors.background)
+        .alert("Clear All History", isPresented: $showClearAllConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All", role: .destructive) {
+                viewModel.deleteAllHistory()
+            }
+        } message: {
+            Text("This will permanently delete all \(viewModel.entries.count) transcriptions. This cannot be undone.")
         }
     }
+
+    // MARK: - Header Bar
+
+    private var headerBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
+                Text("History")
+                    .font(.appLargeTitle)
+                    .foregroundColor(AppColors.textPrimary)
+                Text("\(viewModel.entries.count) transcriptions")
+                    .font(.appCaption)
+                    .foregroundColor(AppColors.textMuted)
+            }
+
+            Spacer()
+
+            if !viewModel.entries.isEmpty {
+                Button(action: { showClearAllConfirm = true }) {
+                    HStack(spacing: AppSpacing.xs) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("Clear All")
+                            .font(.appCaptionBold)
+                    }
+                    .foregroundColor(AppColors.deleteRed)
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.vertical, AppSpacing.sm)
+                    .background(AppColors.deleteRed.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous)
+                            .stroke(AppColors.deleteRed.opacity(0.2), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Delete all transcription history")
+            }
+        }
+    }
+
+    // MARK: - Day Header
+
+    private func dayHeader(_ text: String) -> some View {
+        HStack(spacing: AppSpacing.md) {
+            Text(text)
+                .font(.appSectionTitle)
+                .foregroundColor(AppColors.textMuted)
+                .tracking(0.3)
+            Rectangle()
+                .fill(AppColors.divider)
+                .frame(height: 0.5)
+        }
+        .padding(.horizontal, AppSpacing.xl)
+        .padding(.top, AppSpacing.lg)
+        .padding(.bottom, AppSpacing.sm)
+    }
+
+    // MARK: - Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: AppSpacing.md) {
+            Spacer()
+            Image(systemName: "mic")
+                .font(.appEmptyIcon)
+                .foregroundColor(AppColors.textMuted)
+            VStack(spacing: AppSpacing.xs) {
+                Text("No transcriptions yet")
+                    .font(.appTitle)
+                    .foregroundColor(AppColors.textSecondary)
+                Text("Hold \u{2303}\u{2325} anywhere and start talking.")
+                    .font(.appCaption)
+                    .foregroundColor(AppColors.textMuted)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Grouping
 
     private var groupedEntries: [(key: String, entries: [TranscriptionHistory.Entry])] {
         let calendar = Calendar.current
@@ -104,11 +179,11 @@ struct StatsBar: View {
     let stats: DashboardViewModel.Stats
 
     var body: some View {
-        HStack(spacing: 16) {
-            StatCard(title: "Words", value: formatNumber(stats.totalWords), icon: "text.word.spacing")
-            StatCard(title: "Transcriptions", value: "\(stats.totalTranscriptions)", icon: "waveform")
-            StatCard(title: "Avg Latency", value: "\(stats.averageLatencyMs)ms", icon: "timer")
-            StatCard(title: "Est. Cost", value: formatCost(stats.estimatedCost), icon: "dollarsign.circle")
+        HStack(spacing: AppSpacing.md) {
+            StatCard(title: "Words", value: formatNumber(stats.totalWords))
+            StatCard(title: "Transcriptions", value: "\(stats.totalTranscriptions)")
+            StatCard(title: "Avg Latency", value: "\(stats.averageLatencyMs)ms")
+            StatCard(title: "Est. Cost", value: formatCost(stats.estimatedCost))
         }
     }
 
@@ -130,23 +205,29 @@ struct StatsBar: View {
 struct StatCard: View {
     let title: String
     let value: String
-    let icon: String
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .foregroundColor(.accentColor)
-            Text(value)
-                .font(.title2)
-                .fontWeight(.semibold)
+        VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(.appStatLabel)
+                .foregroundColor(AppColors.textMuted)
+                .tracking(0.3)
+
+            Text(value)
+                .font(.appStatValue)
+                .foregroundColor(AppColors.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, AppSpacing.md)
+        .padding(.vertical, AppSpacing.md)
+        .background(AppColors.cardBg)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                .stroke(AppColors.cardBorder, lineWidth: 0.5)
+        )
     }
 }
 
@@ -154,39 +235,102 @@ struct StatCard: View {
 
 struct TranscriptionRow: View {
     let entry: TranscriptionHistory.Entry
+    var onDelete: (() -> Void)?
     @State private var copied = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(formatTime(entry.timestamp))
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundColor(.secondary)
-                .frame(width: 70, alignment: .trailing)
+        HStack(alignment: .top, spacing: 0) {
+            timelineSection
+            contentSection
+            Spacer()
+            copyButton
+        }
+        .padding(.horizontal, AppSpacing.xl - AppSpacing.sm)
+        .padding(.vertical, AppSpacing.md - 2)
+        .rowHover()
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+        .padding(.horizontal, AppSpacing.sm)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive, action: { onDelete?() }) {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.corrected)
-                    .font(.body)
-                    .textSelection(.enabled)
+    // MARK: - Timeline
+
+    private var timelineSection: some View {
+        VStack(spacing: 0) {
+            TimelineDot()
+            TimelineConnector()
+        }
+        .frame(width: 20)
+        .padding(.trailing, AppSpacing.md)
+        .padding(.top, 5)
+    }
+
+    // MARK: - Content
+
+    private var contentSection: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.xs + 2) {
+            HStack(spacing: AppSpacing.sm) {
+                Text(formatTime(entry.timestamp))
+                    .font(.appMonospaced)
+                    .foregroundColor(AppColors.textMuted)
 
                 if entry.raw != entry.corrected {
-                    Text("raw: \(entry.raw)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 9, weight: .medium))
+                        Text("corrected")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(AppColors.accent)
+                    .padding(.horizontal, AppSpacing.xs + 1)
+                    .padding(.vertical, 2)
+                    .background(AppColors.accentDim)
+                    .clipShape(Capsule())
                 }
             }
 
-            Spacer()
+            Text(entry.corrected)
+                .font(.appBody)
+                .foregroundColor(AppColors.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Button(action: copyToClipboard) {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .foregroundColor(copied ? .green : .secondary)
+            if entry.raw != entry.corrected {
+                HStack(spacing: AppSpacing.xs) {
+                    Text("raw:")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppColors.textMuted)
+                    Text(entry.raw)
+                        .font(.appCaption)
+                        .foregroundColor(AppColors.textMuted)
+                        .italic()
+                        .lineLimit(2)
+                }
             }
-            .buttonStyle(.plain)
-            .help("Copy to clipboard")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .padding(.leading, AppSpacing.xs)
+    }
+
+    // MARK: - Copy Button
+
+    private var copyButton: some View {
+        Button(action: copyToClipboard) {
+            ZStack {
+                RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous)
+                    .fill(copied ? AppColors.successGreen.opacity(0.12) : Color.clear)
+                    .frame(width: 30, height: 30)
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(copied ? AppColors.successGreen : AppColors.textMuted)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Copy to clipboard")
+        .padding(.top, 2)
     }
 
     private func formatTime(_ timestamp: String) -> String {

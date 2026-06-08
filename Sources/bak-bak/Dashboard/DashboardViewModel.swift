@@ -1,6 +1,12 @@
 import Combine
 import Foundation
 import Pipeline
+import ServiceManagement
+
+extension Notification.Name {
+    static let hotkeyModifiersChanged = Notification.Name("hotkeyModifiersChanged")
+    static let recordingModeChanged = Notification.Name("recordingModeChanged")
+}
 
 final class DashboardViewModel: ObservableObject {
 
@@ -51,6 +57,29 @@ final class DashboardViewModel: ObservableObject {
     @Published var vocab: [String: String] = [:]
     @Published var apiKey: String = ""
     @Published var soundEnabled: Bool = true
+    @Published var launchAtLogin: Bool = false
+    @Published var hotkeyModifiers: String = "control+option"
+    @Published var recordingMode: String = "hold"
+
+    static let availableHotkeys = [
+        "control+option",
+        "command+option",
+        "command+shift",
+        "control+shift",
+        "control+command"
+    ]
+
+    static func hotkeySymbols(_ combo: String) -> String {
+        combo.split(separator: "+").map { key in
+            switch key {
+            case "control": return "\u{2303}"
+            case "option": return "\u{2325}"
+            case "command": return "\u{2318}"
+            case "shift": return "\u{21E7}"
+            default: return String(key)
+            }
+        }.joined()
+    }
 
     private let history = TranscriptionHistory()
     private let profileStore = ProfileStore()
@@ -65,8 +94,13 @@ final class DashboardViewModel: ObservableObject {
         if let profile = try? profileStore.read() {
             vocab = profile.vocab
             soundEnabled = profile.soundEnabled
+            hotkeyModifiers = profile.hotkeyModifiers
+            recordingMode = profile.recordingMode
         }
         apiKey = (try? profileStore.getApiKey()) ?? ""
+        if #available(macOS 13.0, *) {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 
     private func computeStats(from entries: [TranscriptionHistory.Entry]) -> Stats {
@@ -127,6 +161,41 @@ final class DashboardViewModel: ObservableObject {
         soundEnabled = enabled
     }
 
+    func setLaunchAtLogin(_ enabled: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+                launchAtLogin = enabled
+            } catch {
+                launchAtLogin = SMAppService.mainApp.status == .enabled
+            }
+        }
+    }
+
+    func saveHotkeyModifiers(_ modifiers: String) {
+        try? profileStore.setHotkeyModifiers(modifiers)
+        hotkeyModifiers = modifiers
+        NotificationCenter.default.post(
+            name: .hotkeyModifiersChanged,
+            object: nil,
+            userInfo: ["modifiers": modifiers]
+        )
+    }
+
+    func saveRecordingMode(_ mode: String) {
+        try? profileStore.setRecordingMode(mode)
+        recordingMode = mode
+        NotificationCenter.default.post(
+            name: .recordingModeChanged,
+            object: nil,
+            userInfo: ["mode": mode]
+        )
+    }
+
     func addVocabEntry(heard: String, intended: String) {
         try? profileStore.addVocabEntry(heard: heard, intended: intended)
         vocab[heard] = intended
@@ -138,5 +207,15 @@ final class DashboardViewModel: ObservableObject {
             try? profileStore.write(profile)
             vocab = profile.vocab
         }
+    }
+
+    func deleteEntry(timestamp: String, raw: String) {
+        history.deleteEntry(timestamp: timestamp, raw: raw)
+        loadData()
+    }
+
+    func deleteAllHistory() {
+        history.deleteAll()
+        loadData()
     }
 }

@@ -6,6 +6,10 @@ final class DashboardWindow {
     private var window: NSWindow?
     private let viewModel = DashboardViewModel()
 
+    func selectSettings() {
+        viewModel.selectedTab = .settings
+    }
+
     func showWindow() {
         if let existing = window {
             existing.makeKeyAndOrderFront(nil)
@@ -19,13 +23,14 @@ final class DashboardWindow {
         let hostingController = NSHostingController(rootView: dashboardView)
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         win.title = "Bak-Bak"
         win.contentViewController = hostingController
+        win.backgroundColor = NSColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1)
         win.center()
         win.setFrameAutosaveName("BakBakDashboard")
         win.minSize = NSSize(width: 600, height: 400)

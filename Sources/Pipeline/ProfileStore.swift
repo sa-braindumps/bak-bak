@@ -8,18 +8,21 @@ public final class ProfileStore: @unchecked Sendable {
 
     public struct Profile: Codable {
         public var vocab: [String: String]
-        public var hotkeyTrigger: String
+        public var hotkeyModifiers: String
+        public var recordingMode: String
         public var correctionWindowSecs: Int
         public var soundEnabled: Bool
 
         public init(
             vocab: [String: String] = [:],
-            hotkeyTrigger: String = "option",
+            hotkeyModifiers: String = "control+option",
+            recordingMode: String = "hold",
             correctionWindowSecs: Int = 10,
             soundEnabled: Bool = true
         ) {
             self.vocab = vocab
-            self.hotkeyTrigger = hotkeyTrigger
+            self.hotkeyModifiers = hotkeyModifiers
+            self.recordingMode = recordingMode
             self.correctionWindowSecs = correctionWindowSecs
             self.soundEnabled = soundEnabled
         }
@@ -66,7 +69,8 @@ public final class ProfileStore: @unchecked Sendable {
         }
 
         if let hotkey = toml["hotkey"]?.table {
-            profile.hotkeyTrigger = hotkey["trigger"]?.string ?? "option"
+            profile.hotkeyModifiers = hotkey["modifiers"]?.string ?? "control+option"
+            profile.recordingMode = hotkey["recording_mode"]?.string ?? "hold"
         }
 
         if let correction = toml["correction"]?.table {
@@ -83,9 +87,19 @@ public final class ProfileStore: @unchecked Sendable {
     // MARK: - Write
 
     public func write(_ profile: Profile) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
         try ensureDirectoryExists()
 
-        let toml = TOMLTable()
+        // Read existing TOML to preserve fields not in Profile (e.g. api_key)
+        var toml: TOMLTable
+        if fileManager.fileExists(atPath: fileURL.path) {
+            let raw = try String(contentsOf: fileURL, encoding: .utf8)
+            toml = try TOMLTable(string: raw)
+        } else {
+            toml = TOMLTable()
+        }
 
         let vocabTable = TOMLTable()
         for (key, value) in profile.vocab {
@@ -93,13 +107,18 @@ public final class ProfileStore: @unchecked Sendable {
         }
         toml["vocab"] = vocabTable
 
-        let hotkeyTable = TOMLTable()
-        hotkeyTable["trigger"] = profile.hotkeyTrigger
+        let hotkeyTable = toml["hotkey"]?.table ?? TOMLTable()
+        hotkeyTable["modifiers"] = profile.hotkeyModifiers
+        hotkeyTable["recording_mode"] = profile.recordingMode
         toml["hotkey"] = hotkeyTable
 
-        let correctionTable = TOMLTable()
+        let correctionTable = toml["correction"]?.table ?? TOMLTable()
         correctionTable["correction_window_secs"] = profile.correctionWindowSecs
         toml["correction"] = correctionTable
+
+        let generalTable = toml["general"]?.table ?? TOMLTable()
+        generalTable["sound_enabled"] = profile.soundEnabled
+        toml["general"] = generalTable
 
         let output = toml.convert()
         try output.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -145,6 +164,50 @@ public final class ProfileStore: @unchecked Sendable {
         let generalTable = toml["general"]?.table ?? TOMLTable()
         generalTable["api_key"] = key
         toml["general"] = generalTable
+
+        let output = toml.convert()
+        try output.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    public func setHotkeyModifiers(_ modifiers: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+
+        var toml: TOMLTable
+        if fileManager.fileExists(atPath: fileURL.path) {
+            let raw = try String(contentsOf: fileURL, encoding: .utf8)
+            toml = try TOMLTable(string: raw)
+        } else {
+            toml = TOMLTable()
+        }
+
+        let hotkeyTable = toml["hotkey"]?.table ?? TOMLTable()
+        hotkeyTable["modifiers"] = modifiers
+        toml["hotkey"] = hotkeyTable
+
+        let output = toml.convert()
+        try output.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    public func setRecordingMode(_ mode: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+
+        var toml: TOMLTable
+        if fileManager.fileExists(atPath: fileURL.path) {
+            let raw = try String(contentsOf: fileURL, encoding: .utf8)
+            toml = try TOMLTable(string: raw)
+        } else {
+            toml = TOMLTable()
+        }
+
+        let hotkeyTable = toml["hotkey"]?.table ?? TOMLTable()
+        hotkeyTable["recording_mode"] = mode
+        toml["hotkey"] = hotkeyTable
 
         let output = toml.convert()
         try output.write(to: fileURL, atomically: true, encoding: .utf8)

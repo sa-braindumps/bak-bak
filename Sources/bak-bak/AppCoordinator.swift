@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 import Pipeline
 
@@ -6,16 +7,18 @@ import Pipeline
 /// Called by AppDelegate on hotkey press/release.
 public final class AppCoordinator: @unchecked Sendable {
 
-    public enum CoordinatorError: Error, LocalizedError {
+    public enum CoordinatorError: Error, LocalizedError, Equatable {
         case apiKeyNotSet
         case micAccessDenied
         case emptyRecording
+        case silenceDetected
 
         public var errorDescription: String? {
             switch self {
-            case .apiKeyNotSet: return "API key not set — run bak-bak setup"
+            case .apiKeyNotSet: return "API key not set — open Dashboard → Settings"
             case .micAccessDenied: return "Mic access denied"
             case .emptyRecording: return nil
+            case .silenceDetected: return nil
             }
         }
     }
@@ -26,6 +29,17 @@ public final class AppCoordinator: @unchecked Sendable {
     private let history = TranscriptionHistory()
     private var correctionController: CorrectionController?
 
+    /// Expose audio levels for UI visualization
+    var onAudioLevel: ((Float) -> Void)? {
+        get { audioRecorder.onAudioLevel }
+        set { audioRecorder.onAudioLevel = newValue }
+    }
+
+    /// Called when the 60s recording limit is hit (auto-stop).
+    var onAutoStop: (() -> Void)?
+    /// Called once when recording approaches the 60s limit (~50s).
+    var onNearLimit: (() -> Void)?
+
     public init() {
         let controller = CorrectionController(profileStore: profileStore, injector: injector)
         self.correctionController = controller
@@ -33,6 +47,12 @@ public final class AppCoordinator: @unchecked Sendable {
 
     /// Start recording audio.
     public func startRecording() {
+        audioRecorder.onAutoStop = { [weak self] in
+            self?.onAutoStop?()
+        }
+        audioRecorder.onNearLimit = { [weak self] in
+            self?.onNearLimit?()
+        }
         do {
             try audioRecorder.startRecording()
         } catch {
@@ -41,7 +61,10 @@ public final class AppCoordinator: @unchecked Sendable {
     }
 
     /// Stop recording and process the audio.
-    public func stopRecording(completion: @escaping (Result<String, Error>) -> Void) {
+    /// - Parameters:
+    ///   - onWillTranscribe: Called after pre-flight checks pass, just before the API call.
+    ///   - completion: Final result callback.
+    public func stopRecording(onWillTranscribe: (() -> Void)? = nil, completion: @escaping (Result<String, Error>) -> Void) {
         let audioData = audioRecorder.stopRecording()
 
         guard !audioData.isEmpty else {
@@ -49,10 +72,34 @@ public final class AppCoordinator: @unchecked Sendable {
             return
         }
 
+        // Minimum duration gate: skip accidental taps (< 300ms)
+        let durationSeconds = Double(audioData.count) / Double(16000 * MemoryLayout<Float>.size)
+        guard durationSeconds >= 0.3 else {
+            completion(.failure(CoordinatorError.emptyRecording))
+            return
+        }
+
+        // RMS energy gate: skip silence (no speech detected)
+        let floatCount = audioData.count / MemoryLayout<Float>.size
+        var sumOfSquares: Float = 0
+        audioData.withUnsafeBytes { ptr in
+            let floats = ptr.bindMemory(to: Float.self)
+            for i in 0..<floatCount {
+                sumOfSquares += floats[i] * floats[i]
+            }
+        }
+        let rms = sqrtf(sumOfSquares / Float(floatCount))
+        guard rms >= 0.005 else {
+            completion(.failure(CoordinatorError.silenceDetected))
+            return
+        }
+
         guard let apiKey = try? profileStore.getApiKey(), !apiKey.isEmpty else {
             completion(.failure(CoordinatorError.apiKeyNotSet))
             return
         }
+
+        onWillTranscribe?()
 
         let transcriber = Transcriber(apiKey: apiKey)
 
@@ -79,7 +126,6 @@ public final class AppCoordinator: @unchecked Sendable {
                     completion(.failure(NSError(domain: "bak-bak", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])))
                 }
 
-                // Open correction window
                 correctionController?.openWindow(afterInjectionLength: correctedText.count)
             } catch {
                 completion(.failure(error))

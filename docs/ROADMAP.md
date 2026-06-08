@@ -1,6 +1,6 @@
 # Bak-Bak — Roadmap
 
-> The one bet: **your corrections should persist and compound.** Every milestone is judged by how directly it serves that flywheel. This roadmap supersedes the milestone sketch in the top-level `VISION.md`: the flywheel ships in **v0.1**, not later — that was the decisive debate finding.
+> The one bet: **your corrections should persist and compound.** Every milestone is judged by how directly it serves that flywheel.
 
 For *what each feature does*, see [`SPEC.md`](../SPEC.md). For *how features slot in without rewrites*, see the extension points in [`ARCHITECTURE.md`](../ARCHITECTURE.md#6-extension-points).
 

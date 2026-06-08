@@ -8,11 +8,17 @@ Hold **Control+Option**, speak, release. Your words appear wherever your cursor 
 
 - **Universal paste** — Works in browsers, Electron apps, native macOS fields
 - **Vocabulary that learns** — Say "no, X is Y" to teach corrections by voice
+- **Configurable hotkey** — Choose your shortcut (Control+Option, Command+Option, etc.)
+- **Hold or toggle mode** — Hold keys to record, or press once to start / again to stop
 - **Transcription history** — Every dictation logged to `~/.bak-bak/history.jsonl`
 - **Dashboard** — SwiftUI window with history timeline, usage insights, dictionary, and settings
 - **Sound feedback** — Audio cues on hotkey press/release (configurable)
 - **Low hallucination** — Uses `gpt-4o-mini-transcribe` with language hints
-- **Floating overlay** — Wispr Flow-style pill showing Listening / Transcribing / Done
+- **Floating overlay** — Pill showing live waveform while recording, with 60s auto-stop
+- **FLAC compression** — Smaller uploads, faster transcription (falls back to WAV)
+- **Silence detection** — Discards empty recordings automatically
+- **Launch at login** — Optional, via macOS Login Items
+- **First-run setup** — Auto-opens settings when API key is missing, prompts for Accessibility
 - **Bring your own key** — No subscriptions, no word limits, ~$0.003/minute
 
 ## Setup
@@ -32,21 +38,18 @@ open /Applications/Bak-Bak.app
 
 On first launch, grant **Microphone** and **Accessibility** permissions when prompted.
 
-### Set your API key
-
-```bash
-swift run bak-bak setup
-```
+On first launch, the app will prompt for Accessibility permission and open Dashboard → Settings so you can enter your API key.
 
 ## Usage
 
 | Action | How |
 |--------|-----|
-| Dictate | Hold **Control+Option**, speak, release |
+| Dictate | Hold **Control+Option**, speak, release (or toggle mode: press once to start, again to stop) |
 | Correct | Say "no, X is Y" or "correction: X is Y" |
-| View history | `swift run bak-bak history` or Dashboard > Home |
-| Diagnostics | `swift run bak-bak doctor` |
-| Dashboard | Menu bar icon > Dashboard (or Cmd+,) |
+| Change shortcut | Dashboard → Settings → Hotkey |
+| View history | `swift run bak-bak history` or Dashboard → Home |
+| Diagnostics | `swift run bak-bak doctor` or menu bar → Run Doctor |
+| Dashboard | Menu bar icon → Dashboard (or Cmd+,) |
 
 ## Architecture
 

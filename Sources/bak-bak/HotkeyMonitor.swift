@@ -1,27 +1,47 @@
 import AppKit
 import Foundation
 
-/// Monitors the global ⌥ hotkey (hold to record, release to transcribe).
-/// Uses NSEvent flagsChanged for modifier detection.
 public final class HotkeyMonitor {
 
     public var onRecordingStart: (() -> Void)?
     public var onRecordingStop: (() -> Void)?
+    public var modifierKeys: NSEvent.ModifierFlags = [.control, .option]
+    public var recordingMode: String = "hold"
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var isKeyHeld = false
+    private var isToggleRecording = false
     private var keyDownTime: Date?
     private let tapTooShortThreshold: TimeInterval = 0.3
 
     public init() {}
+
+    public func updateModifiers(from configString: String) {
+        var flags: NSEvent.ModifierFlags = []
+        for part in configString.lowercased().split(separator: "+") {
+            switch part.trimmingCharacters(in: .whitespaces) {
+            case "control": flags.insert(.control)
+            case "option": flags.insert(.option)
+            case "command": flags.insert(.command)
+            case "shift": flags.insert(.shift)
+            default: break
+            }
+        }
+        if !flags.isEmpty {
+            modifierKeys = flags
+        }
+    }
+
+    public func resetToggleState() {
+        isToggleRecording = false
+    }
 
     deinit {
         stop()
     }
 
     public func start() {
-        // Request accessibility permission (needed for global event monitoring)
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
 
@@ -52,19 +72,33 @@ public final class HotkeyMonitor {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let flags = event.modifierFlags
-        // Require BOTH Control + Option pressed
-        let bothPressed = flags.contains(.control) && flags.contains(.option)
+        let bothPressed = flags.contains(modifierKeys)
 
-        if bothPressed && !isKeyHeld {
-            isKeyHeld = true
-            keyDownTime = Date()
-            DispatchQueue.main.async { self.onRecordingStart?() }
-        } else if !bothPressed && isKeyHeld {
-            isKeyHeld = false
+        if recordingMode == "toggle" {
+            if bothPressed && !isKeyHeld {
+                isKeyHeld = true
+                if isToggleRecording {
+                    isToggleRecording = false
+                    DispatchQueue.main.async { self.onRecordingStop?() }
+                } else {
+                    isToggleRecording = true
+                    DispatchQueue.main.async { self.onRecordingStart?() }
+                }
+            } else if !bothPressed && isKeyHeld {
+                isKeyHeld = false
+            }
+        } else {
+            if bothPressed && !isKeyHeld {
+                isKeyHeld = true
+                keyDownTime = Date()
+                DispatchQueue.main.async { self.onRecordingStart?() }
+            } else if !bothPressed && isKeyHeld {
+                isKeyHeld = false
 
-            let elapsed = Date().timeIntervalSince(keyDownTime ?? Date())
-            if elapsed >= tapTooShortThreshold {
-                DispatchQueue.main.async { self.onRecordingStop?() }
+                let elapsed = Date().timeIntervalSince(keyDownTime ?? Date())
+                if elapsed >= tapTooShortThreshold {
+                    DispatchQueue.main.async { self.onRecordingStop?() }
+                }
             }
         }
     }

@@ -25,6 +25,20 @@ public final class AudioRecorder: @unchecked Sendable {
     private var isRecording = false
     private let lock = NSLock()
     private var startTime: Date?
+    private var didFireNearLimit = false
+    private var didHitLimit = false
+
+    /// Maximum recording duration in seconds.
+    private let maxDuration: TimeInterval = 60
+    /// Warning threshold in seconds (fires `onNearLimit` once).
+    private let nearLimitThreshold: TimeInterval = 50
+
+    /// Called on the main queue when recording is auto-stopped at the duration cap.
+    public var onAutoStop: (() -> Void)?
+    /// Called on the main queue once when recording approaches the duration cap (~50s).
+    public var onNearLimit: (() -> Void)?
+    /// Audio level callback — fires on audio thread with RMS power 0...1
+    public var onAudioLevel: ((Float) -> Void)?
 
     /// Target sample rate for Whisper (16kHz mono)
     private let targetSampleRate: Double = 16000
@@ -46,6 +60,8 @@ public final class AudioRecorder: @unchecked Sendable {
 
         audioBuffer = Data()
         startTime = Date()
+        didFireNearLimit = false
+        didHitLimit = false
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -123,12 +139,39 @@ public final class AudioRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        guard isRecording else { return }
+        guard isRecording, !didHitLimit else { return }
+
+        // Check elapsed time for near-limit warning and hard cap.
+        if let start = startTime {
+            let elapsed = Date().timeIntervalSince(start)
+
+            if elapsed >= maxDuration {
+                didHitLimit = true
+                let callback = onAutoStop
+                DispatchQueue.main.async { callback?() }
+                return
+            }
+
+            if !didFireNearLimit && elapsed >= nearLimitThreshold {
+                didFireNearLimit = true
+                let callback = onNearLimit
+                DispatchQueue.main.async { callback?() }
+            }
+        }
 
         guard let channelData = buffer.floatChannelData?[0] else { return }
         let frameLength = Int(buffer.frameLength)
 
         let data = Data(bytes: channelData, count: frameLength * MemoryLayout<Float>.size)
         audioBuffer.append(data)
+
+        var sumOfSquares: Float = 0
+        for i in 0..<frameLength {
+            let sample = channelData[i]
+            sumOfSquares += sample * sample
+        }
+        let rms = sqrtf(sumOfSquares / Float(frameLength))
+        let normalized = min(rms * 8, 1.0)
+        onAudioLevel?(normalized)
     }
 }

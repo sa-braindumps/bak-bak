@@ -13,9 +13,10 @@ MACOS="$CONTENTS/MacOS"
 # Create app bundle structure if needed
 mkdir -p "$MACOS" "$CONTENTS/Resources"
 
-# Copy binary and Info.plist
+# Copy binary, Info.plist, and icon
 cp .build/release/bak-bak "$MACOS/bak-bak"
 cp Sources/bak-bak/Info.plist "$CONTENTS/Info.plist"
+cp Sources/bak-bak/AppIcon.icns "$CONTENTS/Resources/AppIcon.icns"
 
 # Ad-hoc codesign
 codesign -s - -f --deep "$APP_DIR"

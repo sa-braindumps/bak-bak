@@ -80,4 +80,27 @@ public final class TranscriptionHistory: @unchecked Sendable {
         let all = loadAll()
         return Array(all.suffix(limit))
     }
+
+    /// Delete a single entry by matching its timestamp and raw text (JSONL is append-only, so we rewrite the file).
+    public func deleteEntry(timestamp: String, raw: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
+        let lines = content.components(separatedBy: .newlines)
+        let decoder = JSONDecoder()
+        let filtered = lines.filter { line in
+            guard !line.isEmpty, let data = line.data(using: .utf8),
+                  let entry = try? decoder.decode(Entry.self, from: data) else { return true }
+            return !(entry.timestamp == timestamp && entry.raw == raw)
+        }
+        try? filtered.joined(separator: "\n").appending("\n").write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Delete all history entries (truncates the file).
+    public func deleteAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? "".write(to: fileURL, atomically: true, encoding: .utf8)
+    }
 }

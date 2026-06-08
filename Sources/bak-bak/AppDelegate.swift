@@ -19,11 +19,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator = AppCoordinator()
         hotkeyMonitor = HotkeyMonitor()
 
+        if let profile = try? profileStore.read() {
+            hotkeyMonitor.updateModifiers(from: profile.hotkeyModifiers)
+            hotkeyMonitor.recordingMode = profile.recordingMode
+        }
+
         setupStatusItem()
         setupHotkey()
         setupMenu()
+        setupAudioLevelForwarding()
+        setupDurationCallbacks()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(hotkeyModifiersDidChange(_:)),
+            name: .hotkeyModifiersChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(recordingModeDidChange(_:)),
+            name: .recordingModeChanged,
+            object: nil
+        )
 
         requestMicPermission()
+        checkFirstRun()
+    }
+
+    private func setupAudioLevelForwarding() {
+        coordinator.onAudioLevel = { [weak self] level in
+            self?.overlay.injectAudioLevel(level)
+        }
+    }
+
+    private func setupDurationCallbacks() {
+        coordinator.onAutoStop = { [weak self] in
+            self?.handleRecordingStop()
+        }
+        coordinator.onNearLimit = { [weak self] in
+            self?.overlay.showNearLimit()
+        }
     }
 
     // MARK: - Status Item
@@ -32,13 +68,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
-            if #available(macOS 11.0, *) {
-                let image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Bak-Bak")
-                image?.isTemplate = true
-                button.image = image
-            }
-            button.toolTip = "Bak-Bak — hold ⌃⌥ to talk"
+            button.image = menuBarIcon()
+            button.toolTip = "Bak-Bak \u{2014} hold \u{2303}\u{2325} to talk"
         }
+    }
+
+    private func menuBarIcon() -> NSImage {
+        let img = NSImage(size: NSSize(width: 18, height: 18))
+        img.lockFocus()
+
+        let bars: [(x: CGFloat, h: CGFloat)] = [
+            (3, 6), (6, 11), (9, 14), (12, 11), (15, 6)
+        ]
+        let barW: CGFloat = 2
+        let cy: CGFloat = 9
+
+        NSColor.black.setFill()
+        for bar in bars {
+            let rect = NSRect(x: bar.x, y: cy - bar.h / 2, width: barW, height: bar.h)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
+            path.fill()
+        }
+
+        img.unlockFocus()
+        img.isTemplate = true
+        return img
     }
 
     // MARK: - Menu
@@ -86,6 +140,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.start()
     }
 
+    @objc private func hotkeyModifiersDidChange(_ notification: Notification) {
+        if let modifiers = notification.userInfo?["modifiers"] as? String {
+            hotkeyMonitor.updateModifiers(from: modifiers)
+        }
+    }
+
+    @objc private func recordingModeDidChange(_ notification: Notification) {
+        if let mode = notification.userInfo?["mode"] as? String {
+            hotkeyMonitor.recordingMode = mode
+            hotkeyMonitor.resetToggleState()
+        }
+    }
+
     private func handleRecordingStart() {
         if (try? profileStore.read())?.soundEnabled != false {
             NSSound(named: "Tink")?.play()
@@ -96,27 +163,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleRecordingStop() {
-        if (try? profileStore.read())?.soundEnabled != false {
-            NSSound(named: "Pop")?.play()
-        }
-        overlay.showTranscribing()
-        coordinator.stopRecording { [weak self] result in
-            switch result {
-            case .success:
-                self?.overlay.hide()
-                self?.updateStatusItem(state: .idle)
-            case .failure(let error):
-                let msg = error.localizedDescription
-                if !msg.isEmpty {
-                    self?.overlay.showError(msg)
-                } else {
-                    self?.overlay.hide()
-                }
-                self?.updateStatusItem(state: .error(msg))
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                    self?.updateStatusItem(state: .idle)
+        coordinator.stopRecording(
+            onWillTranscribe: { [weak self] in
+                self?.playReleaseSound()
+                self?.overlay.showTranscribing()
+            },
+            completion: { [weak self] result in
+                guard let self = self else { return }
+                self.hotkeyMonitor.resetToggleState()
+                switch result {
+                case .success:
+                    self.overlay.hide()
+                    self.updateStatusItem(state: .idle)
+                case .failure(let error):
+                    if let coordError = error as? AppCoordinator.CoordinatorError,
+                       coordError == .silenceDetected {
+                        self.overlay.showDiscarded()
+                        self.updateStatusItem(state: .idle)
+                    } else if let coordError = error as? AppCoordinator.CoordinatorError,
+                              coordError == .emptyRecording {
+                        self.overlay.hide()
+                        self.updateStatusItem(state: .idle)
+                    } else {
+                        let msg = error.localizedDescription
+                        if !msg.isEmpty {
+                            self.overlay.showError(msg)
+                        } else {
+                            self.overlay.hide()
+                        }
+                        self.updateStatusItem(state: .error(msg))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            self.updateStatusItem(state: .idle)
+                        }
+                    }
                 }
             }
+        )
+    }
+
+    private func playReleaseSound() {
+        if (try? profileStore.read())?.soundEnabled != false {
+            NSSound(named: "Pop")?.play()
         }
     }
 
@@ -135,12 +222,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             switch state {
             case .idle:
-                if #available(macOS 11.0, *) {
-                    let image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Bak-Bak")
-                    image?.isTemplate = true
-                    self.statusItem.button?.image = image
-                }
-                self.statusItem.button?.toolTip = "Bak-Bak — hold ⌃⌥ to talk"
+                self.pulseTimer?.invalidate()
+                self.statusItem.button?.image = self.menuBarIcon()
+                self.statusItem.button?.toolTip = "Bak-Bak \u{2014} hold \u{2303}\u{2325} to talk"
 
             case .recording:
                 if #available(macOS 11.0, *) {
@@ -148,11 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     image?.isTemplate = true
                     self.statusItem.button?.image = image
                 }
-                self.statusItem.button?.toolTip = "Recording… release ⌃⌥ to transcribe"
+                self.statusItem.button?.toolTip = "Recording\u{2026} release \u{2303}\u{2325} to transcribe"
 
             case .transcribing:
                 self.startPulseAnimation()
-                self.statusItem.button?.toolTip = "Transcribing…"
+                self.statusItem.button?.toolTip = "Transcribing\u{2026}"
 
             case .error(let reason):
                 if #available(macOS 11.0, *) {
@@ -188,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             if !granted {
                 DispatchQueue.main.async {
-                    self.updateStatusItem(state: .error("Mic access denied — grant in System Settings"))
+                    self.updateStatusItem(state: .error("Mic access denied \u{2014} grant in System Settings"))
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                         self.updateStatusItem(state: .idle)
                     }
@@ -209,7 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Bak-Bak"
-        alert.informativeText = "बक-बक — Voice dictation with vocabulary that persists and compounds.\n\nHold ⌃⌥ anywhere and start talking."
+        alert.informativeText = "v0.1.0\n\n\u{092C}\u{0915}-\u{092C}\u{0915} \u{2014} Voice dictation with vocabulary that persists and compounds.\n\nHold \u{2303}\u{2325} anywhere and start talking."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -240,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var text = "Vocabulary (\(vocab.count) entries)\n\n"
         for (heard, intended) in vocab.sorted(by: { $0.key < $1.key }) {
-            text += "\"\(heard)\" → \"\(intended)\"\n"
+            text += "\"\(heard)\" \u{2192} \"\(intended)\"\n"
         }
 
         let alert = NSAlert()
@@ -248,5 +332,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = vocab.isEmpty ? "No entries yet." : text
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    // MARK: - First Run
+
+    private func checkFirstRun() {
+        let needsApiKey = (try? profileStore.getApiKey())?.isEmpty ?? true
+        let needsAccessibility = !Injector().isAccessibilityGranted()
+
+        if needsAccessibility {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.showAccessibilityPrompt()
+            }
+        }
+
+        if needsApiKey {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (needsAccessibility ? 1.5 : 0.5)) {
+                self.showDashboard()
+                self.dashboard?.selectSettings()
+            }
+        }
+    }
+
+    private func showAccessibilityPrompt() {
+        let alert = NSAlert()
+        alert.messageText = "Accessibility Permission Required"
+        alert.informativeText = "Bak-Bak needs Accessibility access to paste transcriptions into other apps.\n\nOpen System Settings \u{2192} Privacy & Security \u{2192} Accessibility, then enable Bak-Bak."
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+        alert.alertStyle = .informational
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+            NSWorkspace.shared.open(url)
+        }
     }
 }
