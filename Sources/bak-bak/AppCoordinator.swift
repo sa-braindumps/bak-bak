@@ -29,10 +29,10 @@ public final class AppCoordinator: @unchecked Sendable {
     private let history = TranscriptionHistory()
     private var correctionController: CorrectionController?
 
-    /// Expose audio levels for UI visualization
-    var onAudioLevel: ((Float) -> Void)? {
-        get { audioRecorder.onAudioLevel }
-        set { audioRecorder.onAudioLevel = newValue }
+    /// Expose audio spectrum bands for UI visualization
+    var onSpectrum: (([Float]) -> Void)? {
+        get { audioRecorder.onSpectrum }
+        set { audioRecorder.onSpectrum = newValue }
     }
 
     /// Called when the 60s recording limit is hit (auto-stop).

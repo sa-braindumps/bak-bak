@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -37,17 +38,62 @@ public final class AudioRecorder: @unchecked Sendable {
     public var onAutoStop: (() -> Void)?
     /// Called on the main queue once when recording approaches the duration cap (~50s).
     public var onNearLimit: (() -> Void)?
-    /// Audio level callback — fires on audio thread with RMS power 0...1
-    public var onAudioLevel: ((Float) -> Void)?
+    /// Spectrum callback — fires on the audio thread with `bandCount` normalised
+    /// frequency-band magnitudes (0...1), low frequency first. Drives the equalizer overlay.
+    public var onSpectrum: (([Float]) -> Void)?
 
     /// Target sample rate for Whisper (16kHz mono)
     private let targetSampleRate: Double = 16000
 
-    public init() {}
+    // MARK: - FFT spectrum analysis
+
+    /// Number of frequency bands emitted (low → high). The overlay mirrors these
+    /// across its bars (bass in the centre, treble at the edges).
+    private let bandCount = 5
+    /// FFT window size in samples (power of two).
+    private let fftSize = 1024
+    private let log2n: vDSP_Length
+    private let fftSetup: FFTSetup?
+    private let hannWindow: [Float]
+    /// Precomputed [lo, hi) magnitude-bin range for each band (log-spaced).
+    private let bandBinRanges: [(Int, Int)]
+    /// Per-band smoothed magnitudes (attack-fast / decay-slow), audio-thread only.
+    private var smoothedBands: [Float]
+    /// Master gain applied before the perceptual sqrt compression. Tunable by ear.
+    private let masterGain: Float = 0.08
+
+    public init() {
+        log2n = vDSP_Length(log2(Float(fftSize)))
+        fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
+
+        var window = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+        hannWindow = window
+
+        smoothedBands = [Float](repeating: 0, count: bandCount)
+
+        // Log-spaced frequency bands across the speech range.
+        let binHz = Float(targetSampleRate) / Float(fftSize)
+        let nyquistBins = fftSize / 2
+        let freqLow: Float = 110
+        let freqHigh: Float = 5500
+        var ranges: [(Int, Int)] = []
+        for b in 0..<bandCount {
+            let f0 = freqLow * powf(freqHigh / freqLow, Float(b) / Float(bandCount))
+            let f1 = freqLow * powf(freqHigh / freqLow, Float(b + 1) / Float(bandCount))
+            let lo = max(1, min(nyquistBins - 1, Int(f0 / binHz)))
+            let hi = max(lo + 1, min(nyquistBins, Int(f1 / binHz)))
+            ranges.append((lo, hi))
+        }
+        bandBinRanges = ranges
+    }
 
     deinit {
         if isRecording {
             _ = stopRecording()
+        }
+        if let fftSetup {
+            vDSP_destroy_fftsetup(fftSetup)
         }
     }
 
@@ -76,7 +122,7 @@ public final class AudioRecorder: @unchecked Sendable {
 
         let hardwareFormat = inputNode.outputFormat(forBus: 0)
         if hardwareFormat.sampleRate == targetSampleRate && hardwareFormat.channelCount == 1 {
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { [weak self] buffer, _ in
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 self?.appendBuffer(buffer)
             }
         } else {
@@ -165,13 +211,61 @@ public final class AudioRecorder: @unchecked Sendable {
         let data = Data(bytes: channelData, count: frameLength * MemoryLayout<Float>.size)
         audioBuffer.append(data)
 
-        var sumOfSquares: Float = 0
-        for i in 0..<frameLength {
-            let sample = channelData[i]
-            sumOfSquares += sample * sample
+        emitSpectrum(channelData, frameLength: frameLength)
+    }
+
+    /// Runs a real FFT over the latest samples and emits smoothed per-band
+    /// magnitudes via `onSpectrum`. Called on the audio thread with `lock` held.
+    private func emitSpectrum(_ channelData: UnsafePointer<Float>, frameLength: Int) {
+        guard let fftSetup else { return }
+        let n = fftSize
+        let half = n / 2
+
+        // Apply a Hann window over up to `n` samples (zero-padded if shorter).
+        var windowed = [Float](repeating: 0, count: n)
+        let take = min(frameLength, n)
+        vDSP_vmul(channelData, 1, hannWindow, 1, &windowed, 1, vDSP_Length(take))
+
+        var real = [Float](repeating: 0, count: half)
+        var imag = [Float](repeating: 0, count: half)
+        var bands = [Float](repeating: 0, count: bandCount)
+
+        real.withUnsafeMutableBufferPointer { realPtr in
+            imag.withUnsafeMutableBufferPointer { imagPtr in
+                var split = DSPSplitComplex(realp: realPtr.baseAddress!, imagp: imagPtr.baseAddress!)
+
+                // Pack the real input into split-complex form, then forward FFT.
+                windowed.withUnsafeBufferPointer { wPtr in
+                    wPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { complexPtr in
+                        vDSP_ctoz(complexPtr, 2, &split, 1, vDSP_Length(half))
+                    }
+                }
+                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+
+                var magnitudes = [Float](repeating: 0, count: half)
+                vDSP_zvabs(&split, 1, &magnitudes, 1, vDSP_Length(half))
+
+                for b in 0..<bandCount {
+                    let (lo, hi) = bandBinRanges[b]
+                    var sum: Float = 0
+                    magnitudes.withUnsafeBufferPointer { magPtr in
+                        vDSP_sve(magPtr.baseAddress! + lo, 1, &sum, vDSP_Length(hi - lo))
+                    }
+                    let avg = sum / Float(hi - lo)
+                    // Lift higher bands (less energy) and compress perceptually.
+                    let gain = 1.0 + 1.6 * Float(b) / Float(max(1, bandCount - 1))
+                    bands[b] = min(1.0, sqrtf(avg * gain * masterGain))
+                }
+            }
         }
-        let rms = sqrtf(sumOfSquares / Float(frameLength))
-        let normalized = min(rms * 8, 1.0)
-        onAudioLevel?(normalized)
+
+        // Attack fast, decay slow — classic equalizer ballistics.
+        for i in 0..<bandCount {
+            let target = bands[i]
+            let rate: Float = target > smoothedBands[i] ? 0.55 : 0.22
+            smoothedBands[i] += (target - smoothedBands[i]) * rate
+        }
+
+        onSpectrum?(smoothedBands)
     }
 }

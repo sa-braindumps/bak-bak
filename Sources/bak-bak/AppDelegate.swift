@@ -49,8 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupAudioLevelForwarding() {
-        coordinator.onAudioLevel = { [weak self] level in
-            self?.overlay.injectAudioLevel(level)
+        coordinator.onSpectrum = { [weak self] bands in
+            self?.overlay.injectSpectrum(bands)
         }
     }
 

@@ -1,103 +1,84 @@
 import AppKit
+import SwiftUI
 
 final class RecordingOverlay {
-
-    enum State {
-        case recording
-        case transcribing
-        case done
-        case discarded
-        case error(String)
-    }
-
+    
     private var window: NSWindow?
-    private var contentView: OverlayPillView?
-    private var animationTimer: Timer?
     private var dismissTimer: Timer?
-    private var doneText: String = ""
     private var pendingRecordingDuration: TimeInterval = 0
-
+    private let viewModel = OverlayViewModel()
+    
     func show() {
         guard window == nil else { return }
         setState(.recording)
     }
-
+    
     func hide() {
-        doneText = ""
+        viewModel.doneText = ""
         setState(.done)
     }
-
+    
     func showDone(text: String) {
-        doneText = text
+        viewModel.doneText = text
         setState(.done)
     }
-
+    
     func showError(_ message: String) {
-        setState(.error(message))
+        viewModel.errorMessage = message
+        setState(.error)
     }
-
+    
     func showTranscribing(recordingDuration: TimeInterval = 0) {
         pendingRecordingDuration = recordingDuration
         setState(.transcribing)
     }
-
+    
     func showDiscarded() {
         setState(.discarded)
     }
-
+    
     func showNearLimit() {
         DispatchQueue.main.async { [weak self] in
-            self?.contentView?.isNearLimit = true
+            self?.viewModel.isNearLimit = true
         }
     }
-
-    func injectAudioLevel(_ level: Float) {
+    
+    func injectSpectrum(_ bands: [Float]) {
         DispatchQueue.main.async { [weak self] in
-            self?.contentView?.rawLevel = level
+            withAnimation(.linear(duration: 0.08)) {
+                self?.viewModel.bands = bands
+            }
         }
     }
-
-    private func setState(_ state: State) {
+    
+    private func setState(_ state: OverlayViewModel.State) {
         DispatchQueue.main.async { [weak self] in
             self?.applyState(state)
         }
     }
-
-    private func applyState(_ state: State) {
+    
+    private func applyState(_ state: OverlayViewModel.State) {
         dismissTimer?.invalidate()
         dismissTimer = nil
 
         switch state {
         case .recording:
-            ensureWindow(width: 180)
-            setWindowWidth(180)
-            contentView?.rawLevel = 0
-            contentView?.smoothedLevel = 0
-            contentView?.isNearLimit = false
-            contentView?.doneText = ""
-            contentView?.state = .recording
-            startAnimation()
+            ensureWindow()
+            viewModel.bands = OverlayViewModel.emptyBands
+            viewModel.isNearLimit = false
+            viewModel.doneText = ""
+            viewModel.state = .recording
 
         case .transcribing:
-            ensureWindow(width: 240)
-            setWindowWidth(240)
-            contentView?.rawLevel = 0
-            contentView?.smoothedLevel = 0
-            contentView?.recordingDuration = pendingRecordingDuration
-            contentView?.transcribingStartDate = Date()
-            contentView?.state = .transcribing
-            startAnimation()
+            ensureWindow()
+            viewModel.recordingDuration = pendingRecordingDuration
+            viewModel.transcribingStartDate = Date()
+            viewModel.state = .transcribing
 
         case .done:
             guard window != nil else { return }
-            animationTimer?.invalidate()
-            animationTimer = nil
-            let text = doneText
-            let targetWidth: CGFloat = text.isEmpty ? 180 : 280
-            setWindowWidth(targetWidth, animate: !text.isEmpty)
-            contentView?.doneText = text
-            contentView?.state = .done
-            contentView?.needsDisplay = true
+            viewModel.state = .done
+            let text = viewModel.doneText
             let displayDuration: TimeInterval = text.isEmpty ? 0.6 : 1.5
             dismissTimer = Timer.scheduledTimer(withTimeInterval: displayDuration, repeats: false) { [weak self] _ in
                 self?.tearDown()
@@ -105,98 +86,65 @@ final class RecordingOverlay {
 
         case .discarded:
             guard window != nil else { return }
-            animationTimer?.invalidate()
-            animationTimer = nil
-            contentView?.state = .discarded
-            contentView?.needsDisplay = true
+            viewModel.state = .discarded
             dismissTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
                 self?.tearDown()
             }
 
-        case .error(let msg):
-            ensureWindow(width: 180)
-            setWindowWidth(180)
-            animationTimer?.invalidate()
-            animationTimer = nil
-            contentView?.errorMessage = msg
-            contentView?.state = .error
-            contentView?.needsDisplay = true
+        case .error:
+            ensureWindow()
+            viewModel.state = .error
             dismissTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 self?.tearDown()
             }
         }
     }
-
-    private func ensureWindow(width: CGFloat) {
+    
+    private func ensureWindow() {
         guard window == nil else { return }
 
-        let height: CGFloat = 44
+        // Create a window large enough to contain the spring animation width expansions
+        let windowWidth: CGFloat = 400
+        let height: CGFloat = 80 
 
         guard let screen = NSScreen.main else { return }
-        let x = screen.frame.midX - width / 2
+        let x = screen.frame.midX - windowWidth / 2
         let y = screen.frame.maxY - height - 60
 
         let win = NSWindow(
-            contentRect: NSRect(x: x, y: y, width: width, height: height),
+            contentRect: NSRect(x: x, y: y, width: windowWidth, height: height),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
         win.level = .floating + 1
         win.isOpaque = false
-        win.backgroundColor = .clear
-        win.hasShadow = true
+        win.backgroundColor = .clear // Passthrough for clicks on transparent areas
+        win.hasShadow = true         // macOS adds dropshadow to non-clear views
         win.isMovableByWindowBackground = true
         win.collectionBehavior = [.canJoinAllSpaces, .stationary]
         win.ignoresMouseEvents = false
 
-        let pill = OverlayPillView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        pill.autoresizingMask = [.width, .height]
-        win.contentView = pill
+        let hostingView = NSHostingView(rootView: OverlayContainerView(viewModel: viewModel))
+        win.contentView = hostingView
 
         window = win
-        contentView = pill
         win.orderFront(nil)
     }
-
-    private func setWindowWidth(_ width: CGFloat, animate: Bool = false) {
-        guard let win = window, let screen = NSScreen.main else { return }
-        guard abs(win.frame.width - width) > 1 else { return }
-        let newX = screen.frame.midX - width / 2
-        let newFrame = NSRect(x: newX, y: win.frame.minY, width: width, height: 44)
-        win.setFrame(newFrame, display: true, animate: animate)
-    }
-
-    private func startAnimation() {
-        animationTimer?.invalidate()
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            guard let self = self, let view = self.contentView else { return }
-            view.animationPhase += 0.1
-            if view.animationPhase > .pi * 2 {
-                view.animationPhase -= .pi * 2
-            }
-            view.smoothedLevel += (view.rawLevel - view.smoothedLevel) * 0.3
-            view.needsDisplay = true
-        }
-    }
-
+    
     private func tearDown() {
-        animationTimer?.invalidate()
-        animationTimer = nil
         dismissTimer?.invalidate()
         dismissTimer = nil
         window?.orderOut(nil)
         window = nil
-        contentView = nil
-        doneText = ""
+        viewModel.doneText = ""
     }
 }
 
-// MARK: - OverlayPillView
+// MARK: - SwiftUI Views and ViewModel
 
-private class OverlayPillView: NSView {
-
-    enum DisplayState {
+final class OverlayViewModel: ObservableObject {
+    enum State: Equatable {
         case recording
         case transcribing
         case done
@@ -204,284 +152,322 @@ private class OverlayPillView: NSView {
         case error
     }
 
-    var state: DisplayState = .recording
-    var animationPhase: CGFloat = 0
-    var errorMessage: String = ""
-    var rawLevel: Float = 0
-    var smoothedLevel: Float = 0
-    var isNearLimit = false
-    var doneText: String = ""
-    var recordingDuration: TimeInterval = 0
-    var transcribingStartDate: Date?
+    /// Number of frequency bands emitted by the recorder (low → high).
+    static let bandCount = 5
+    static let emptyBands = [Float](repeating: 0, count: bandCount)
 
-    private let barCount = 9
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 3.5
-    private let maxBarHeight: CGFloat = 18
+    @Published var state: State = .recording
+    /// Per-band magnitudes (0...1), low frequency first.
+    @Published var bands: [Float] = emptyBands
+    @Published var isNearLimit: Bool = false
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-
-        let pill = bounds.insetBy(dx: 2, dy: 2)
-        let radius = pill.height / 2
-        let path = CGPath(roundedRect: pill, cornerWidth: radius, cornerHeight: radius, transform: nil)
-
-        ctx.setFillColor(NSColor(white: 0.08, alpha: 0.94).cgColor)
-        ctx.addPath(path)
-        ctx.fillPath()
-
-        let borderColor: NSColor
+    /// Overall loudness used to drive the pill's glow-pulse.
+    var overallLevel: Float { bands.max() ?? 0 }
+    @Published var doneText: String = ""
+    @Published var errorMessage: String = ""
+    @Published var recordingDuration: TimeInterval = 0
+    @Published var transcribingStartDate: Date?
+    
+    var targetWidth: CGFloat {
         switch state {
-        case .recording: borderColor = (isNearLimit ? NSColor.systemOrange : NSColor.systemRed).withAlphaComponent(0.35)
-        case .transcribing: borderColor = NSColor.systemBlue.withAlphaComponent(0.35)
-        case .done: borderColor = NSColor.systemGreen.withAlphaComponent(0.35)
-        case .discarded: borderColor = NSColor.systemGray.withAlphaComponent(0.35)
-        case .error: borderColor = NSColor.systemRed.withAlphaComponent(0.35)
-        }
-        ctx.setStrokeColor(borderColor.cgColor)
-        ctx.setLineWidth(0.5)
-        ctx.addPath(path)
-        ctx.strokePath()
-
-        switch state {
-        case .recording: drawRecording(ctx)
-        case .transcribing: drawTranscribing(ctx)
-        case .done: drawDone(ctx)
-        case .discarded: drawDiscarded(ctx)
-        case .error: drawError(ctx)
+        case .recording: return 210
+        case .transcribing: return 240
+        case .done: return doneText.isEmpty ? 180 : 320
+        case .discarded: return 180
+        case .error: return 180
         }
     }
+}
 
-    // MARK: - Recording (Live Waveform)
+struct OverlayContainerView: View {
+    @ObservedObject var viewModel: OverlayViewModel
+    
+    var body: some View {
+        OverlayPillView(viewModel: viewModel)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
 
-    private func drawRecording(_ ctx: CGContext) {
-        let tintColor: NSColor = isNearLimit ? .systemOrange : .systemRed
-        let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
-        let startX: CGFloat = 20
-        let centerY = bounds.midY
-        let level = CGFloat(smoothedLevel)
-
-        for i in 0..<barCount {
-            let x = startX + CGFloat(i) * (barWidth + barSpacing)
-            let phase = animationPhase + CGFloat(i) * 0.7
-            let wave = (sin(phase) + 1) / 2
-            let combined = wave * 0.4 + level * 0.6
-            let barH = max(3, maxBarHeight * combined)
-
-            let barRect = CGRect(x: x, y: centerY - barH / 2, width: barWidth, height: barH)
-            let barRadius = barWidth / 2
-            let barPath = CGPath(roundedRect: barRect, cornerWidth: barRadius, cornerHeight: barRadius, transform: nil)
-
-            let alpha = CGFloat(0.5 + 0.5 * combined)
-            ctx.setFillColor(tintColor.withAlphaComponent(alpha).cgColor)
-            ctx.addPath(barPath)
-            ctx.fillPath()
-
-            if combined > 0.4 {
-                let glowAlpha = CGFloat((combined - 0.4) * 0.4)
-                ctx.setFillColor(tintColor.withAlphaComponent(glowAlpha).cgColor)
-                let glowRect = barRect.insetBy(dx: -2, dy: -2)
-                let glowPath = CGPath(roundedRect: glowRect, cornerWidth: barRadius + 2, cornerHeight: barRadius + 2, transform: nil)
-                ctx.addPath(glowPath)
-                ctx.fillPath()
+struct OverlayPillView: View {
+    @ObservedObject var viewModel: OverlayViewModel
+    
+    var body: some View {
+        ZStack {
+            if viewModel.state == .recording {
+                glowLayer
             }
-        }
 
-        let dotPulse = (sin(animationPhase * 1.5) + 1) / 2
-        let dotR: CGFloat = 3.5 * (0.8 + 0.2 * dotPulse)
-        let dotCenter = CGPoint(x: 10, y: centerY)
-        ctx.setFillColor(tintColor.withAlphaComponent(0.3 * dotPulse).cgColor)
-        ctx.fillEllipse(in: CGRect(x: dotCenter.x - dotR - 2, y: dotCenter.y - dotR - 2, width: (dotR + 2) * 2, height: (dotR + 2) * 2))
-        ctx.setFillColor(tintColor.cgColor)
-        ctx.fillEllipse(in: CGRect(x: dotCenter.x - dotR, y: dotCenter.y - dotR, width: dotR * 2, height: dotR * 2))
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
 
-        let label = isNearLimit ? "Wrapping up..." : "Listening..."
-        drawText(label, at: startX + totalWidth + 8, ctx: ctx, color: NSColor(white: 0.85, alpha: 1))
-    }
+            Capsule()
+                .stroke(borderColor.opacity(0.35), lineWidth: 0.5)
 
-    // MARK: - Transcribing
-
-    private func drawTranscribing(_ ctx: CGContext) {
-        let elapsed = transcribingStartDate.map { Date().timeIntervalSince($0) } ?? 0
-        let isFrozen = elapsed < 0.15
-
-        let centerX: CGFloat = 20
-        let centerY = bounds.midY
-
-        if isFrozen {
-            // Waveform freeze: show the captured audio shape briefly before the spinner
-            drawFrozenWaveform(ctx)
-        } else {
-            let orbitR: CGFloat = 7
-            ctx.saveGState()
-            ctx.translateBy(x: centerX, y: centerY)
-            for i in 0..<4 {
-                let angle = animationPhase * 1.2 + CGFloat(i) * (.pi * 2 / 4)
-                let x = cos(angle) * orbitR
-                let y = sin(angle) * orbitR
-                let alpha = 0.3 + 0.7 * CGFloat(i) / 3.0
-                let dotR: CGFloat = 2.5 - CGFloat(i) * 0.3
-                ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(alpha).cgColor)
-                ctx.fillEllipse(in: CGRect(x: x - dotR, y: y - dotR, width: dotR * 2, height: dotR * 2))
+            Group {
+                switch viewModel.state {
+                case .recording:
+                    recordingView
+                case .transcribing:
+                    transcribingView
+                case .done:
+                    doneView
+                case .discarded:
+                    discardedView
+                case .error:
+                    errorView
+                }
             }
-            ctx.restoreGState()
+            .id(viewModel.state == .recording ? "recording" : "transition") 
         }
-
-        // "Got 4.2s  Transcribing  1.2s" — confirms audio was captured + shows live elapsed
-        let durationStr = formatDuration(recordingDuration)
-        let visibleElapsed = max(0, elapsed - 0.15)
-        let elapsedStr = formatDuration(visibleElapsed)
-
-        let label = NSMutableAttributedString()
-        label.append(NSAttributedString(
-            string: "Got \(durationStr)  ",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor(white: 0.5, alpha: 1)
-            ]
-        ))
-        label.append(NSAttributedString(
-            string: isFrozen ? "Captured" : "Transcribing",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: NSColor.systemBlue.withAlphaComponent(0.9)
-            ]
-        ))
-        if !isFrozen && visibleElapsed > 0 {
-            label.append(NSAttributedString(
-                string: "  \(elapsedStr)",
-                attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-                    .foregroundColor: NSColor.systemBlue.withAlphaComponent(0.5)
-                ]
-            ))
-        }
-
-        let labelSize = label.size()
-        let labelRect = CGRect(
-            x: 36,
-            y: centerY - labelSize.height / 2,
-            width: bounds.width - 44,
-            height: labelSize.height
-        )
-        label.draw(in: labelRect)
+        .frame(width: viewModel.targetWidth, height: 44)
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: viewModel.state)
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: viewModel.doneText)
     }
-
-    private func drawFrozenWaveform(_ ctx: CGContext) {
-        let tintColor = NSColor.systemBlue
-        let startX: CGFloat = 8
-        let centerY = bounds.midY
-        let level = CGFloat(smoothedLevel)
-
-        for i in 0..<barCount {
-            let x = startX + CGFloat(i) * (barWidth + barSpacing)
-            let phase = CGFloat(i) * 0.7
-            let wave = (sin(phase) + 1) / 2
-            let combined = wave * 0.4 + level * 0.6
-            let barH = max(3, maxBarHeight * combined)
-
-            let barRect = CGRect(x: x, y: centerY - barH / 2, width: barWidth, height: barH)
-            let barRadius = barWidth / 2
-            let barPath = CGPath(roundedRect: barRect, cornerWidth: barRadius, cornerHeight: barRadius, transform: nil)
-            ctx.setFillColor(tintColor.withAlphaComponent(CGFloat(0.4 + 0.4 * combined)).cgColor)
-            ctx.addPath(barPath)
-            ctx.fillPath()
+    
+    /// Soft halo behind the pill that breathes gently and swells with the voice.
+    private var glowLayer: some View {
+        TimelineView(.animation) { timeline in
+            let idle = (sin(timeline.date.timeIntervalSince1970 * 2.2) + 1) / 2 * 0.15
+            let intensity = min(1.0, idle + Double(viewModel.overallLevel))
+            Capsule()
+                .stroke(borderColor.opacity(0.25 + 0.45 * intensity), lineWidth: 1.0 + 1.5 * intensity)
+                .blur(radius: 3 + 5 * intensity)
+                .opacity(0.85)
         }
     }
 
-    // MARK: - Done
-
-    private func drawDone(_ ctx: CGContext) {
-        let center = CGPoint(x: 20, y: bounds.midY)
-        let r: CGFloat = 8
-        ctx.setFillColor(NSColor.systemGreen.withAlphaComponent(0.15).cgColor)
-        ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-
-        ctx.setStrokeColor(NSColor.systemGreen.cgColor)
-        ctx.setLineWidth(2)
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
-        ctx.move(to: CGPoint(x: center.x - 3.5, y: center.y))
-        ctx.addLine(to: CGPoint(x: center.x - 0.5, y: center.y - 3))
-        ctx.addLine(to: CGPoint(x: center.x + 4, y: center.y + 3))
-        ctx.strokePath()
-
-        if doneText.isEmpty {
-            drawText("Done", at: 36, ctx: ctx, color: NSColor.systemGreen)
-        } else {
-            let maxChars = 32
-            let snippet = doneText.count > maxChars
-                ? String(doneText.prefix(maxChars)) + "\u{2026}"
-                : doneText
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11.5, weight: .regular),
-                .foregroundColor: NSColor(white: 0.88, alpha: 1)
-            ]
-            let size = (snippet as NSString).size(withAttributes: attrs)
-            let rect = CGRect(x: 36, y: bounds.midY - size.height / 2, width: bounds.width - 44, height: size.height)
-            (snippet as NSString).draw(in: rect, withAttributes: attrs)
+    private var borderColor: Color {
+        switch viewModel.state {
+        case .recording: return viewModel.isNearLimit ? .orange : .red
+        case .transcribing: return .blue
+        case .done: return .green
+        case .discarded: return .gray
+        case .error: return .red
         }
     }
-
-    // MARK: - Discarded
-
-    private func drawDiscarded(_ ctx: CGContext) {
-        let center = CGPoint(x: 24, y: bounds.midY)
-        let r: CGFloat = 8
-        ctx.setFillColor(NSColor.systemGray.withAlphaComponent(0.15).cgColor)
-        ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-
-        ctx.setStrokeColor(NSColor.systemGray.cgColor)
-        ctx.setLineWidth(1.8)
-        ctx.setLineCap(.round)
-        ctx.move(to: CGPoint(x: center.x, y: center.y - 4))
-        ctx.addLine(to: CGPoint(x: center.x, y: center.y + 4))
-        ctx.strokePath()
-        ctx.move(to: CGPoint(x: center.x - 4, y: center.y + 4))
-        ctx.addLine(to: CGPoint(x: center.x + 4, y: center.y - 4))
-        ctx.strokePath()
-
-        drawText("No speech", at: 40, ctx: ctx, color: NSColor.systemGray)
+    
+    private var recordingView: some View {
+        HStack(spacing: 8) {
+            TimelineView(.animation) { timeline in
+                let dotPulse = (sin(timeline.date.timeIntervalSince1970 * 4.5) + 1.0) / 2.0
+                let dotR = 3.5 * (0.8 + 0.2 * dotPulse)
+                let tintColor: Color = viewModel.isNearLimit ? .orange : .red
+                
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(tintColor.opacity(0.3 * dotPulse))
+                            .frame(width: (dotR + 2) * 2, height: (dotR + 2) * 2)
+                        Circle()
+                            .fill(tintColor)
+                            .frame(width: dotR * 2, height: dotR * 2)
+                    }
+                    .frame(width: 14)
+                    
+                    WaveformView(date: timeline.date, bands: viewModel.bands, isNearLimit: viewModel.isNearLimit, isFrozen: false)
+                }
+            }
+            
+            Text(viewModel.isNearLimit ? "Wrapping up..." : "Listening...")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Color(nsColor: NSColor(white: 0.85, alpha: 1)))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
     }
-
-    // MARK: - Error
-
-    private func drawError(_ ctx: CGContext) {
-        let center = CGPoint(x: 24, y: bounds.midY)
-        let r: CGFloat = 8
-        ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.15).cgColor)
-        ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-
-        ctx.setStrokeColor(NSColor.systemRed.cgColor)
-        ctx.setLineWidth(2)
-        ctx.setLineCap(.round)
-        ctx.move(to: CGPoint(x: center.x - 3, y: center.y - 3))
-        ctx.addLine(to: CGPoint(x: center.x + 3, y: center.y + 3))
-        ctx.strokePath()
-        ctx.move(to: CGPoint(x: center.x + 3, y: center.y - 3))
-        ctx.addLine(to: CGPoint(x: center.x - 3, y: center.y + 3))
-        ctx.strokePath()
-
-        let msg = errorMessage.isEmpty ? "Error" : errorMessage
-        let truncated = msg.count > 16 ? String(msg.prefix(16)) + "\u{2026}" : msg
-        drawText(truncated, at: 40, ctx: ctx, color: NSColor.systemRed)
+    
+    private var transcribingView: some View {
+        HStack(spacing: 8) {
+            TimelineView(.animation) { timeline in
+                let elapsed = viewModel.transcribingStartDate.map { timeline.date.timeIntervalSince($0) } ?? 0
+                let isFrozen = elapsed < 0.15
+                
+                HStack(spacing: 8) {
+                    if isFrozen {
+                        WaveformView(date: viewModel.transcribingStartDate ?? timeline.date, bands: viewModel.bands, isNearLimit: false, isFrozen: true)
+                            .frame(width: 20)
+                    } else {
+                        SpinnerView(date: timeline.date)
+                            .frame(width: 20)
+                    }
+                    
+                    let durationStr = formatDuration(viewModel.recordingDuration)
+                    let visibleElapsed = max(0, elapsed - 0.15)
+                    let elapsedStr = formatDuration(visibleElapsed)
+                    
+                    HStack(spacing: 6) {
+                        Text("Got \(durationStr)")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(Color(nsColor: NSColor(white: 0.5, alpha: 1)))
+                        
+                        Text(isFrozen ? "Captured" : "Transcribing")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.blue.opacity(0.9))
+                        
+                        if !isFrozen && visibleElapsed > 0.1 {
+                            Text(elapsedStr)
+                                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                .foregroundColor(.blue.opacity(0.5))
+                        }
+                    }
+                    .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
     }
-
-    // MARK: - Helpers
-
+    
+    private var doneView: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().fill(Color.green.opacity(0.15)).frame(width: 16, height: 16)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.green)
+            }
+            .frame(width: 24)
+            
+            if viewModel.doneText.isEmpty {
+                Text("Done")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.green)
+            } else {
+                Text(viewModel.doneText)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(Color(nsColor: NSColor(white: 0.88, alpha: 1)))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
+    }
+    
+    private var discardedView: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().fill(Color.gray.opacity(0.15)).frame(width: 16, height: 16)
+                Image(systemName: "mic.slash")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.gray)
+            }
+            .frame(width: 24)
+            
+            Text("No speech")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.gray)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
+    }
+    
+    private var errorView: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().fill(Color.red.opacity(0.15)).frame(width: 16, height: 16)
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.red)
+            }
+            .frame(width: 24)
+            
+            let message = viewModel.errorMessage.isEmpty ? "Error" : viewModel.errorMessage
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.red)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .transition(.opacity)
+    }
+    
     private func formatDuration(_ seconds: TimeInterval) -> String {
         if seconds < 10 { return String(format: "%.1fs", seconds) }
         return "\(Int(seconds.rounded()))s"
     }
+}
 
-    private func drawText(_ text: String, at x: CGFloat, ctx: CGContext, color: NSColor) {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: color
-        ]
-        let size = (text as NSString).size(withAttributes: attrs)
-        let rect = CGRect(x: x, y: bounds.midY - size.height / 2, width: bounds.width - x - 8, height: size.height)
-        (text as NSString).draw(in: rect, withAttributes: attrs)
+// MARK: - Subcomponents
+
+struct WaveformView: View {
+    let date: Date
+    /// Per-band magnitudes (0...1), low frequency first.
+    let bands: [Float]
+    let isNearLimit: Bool
+    let isFrozen: Bool
+
+    let barCount = 9
+    let barWidth: CGFloat = 3
+    let barSpacing: CGFloat = 3.5
+    let maxBarHeight: CGFloat = 18
+
+    var body: some View {
+        let tintColor: Color = isNearLimit ? .orange : (isFrozen ? .blue : .red)
+        // Fast secondary oscillation keeps the bars alive between FFT frames.
+        let phase = isFrozen ? 0 : date.timeIntervalSince1970 * 6.0
+
+        HStack(spacing: barSpacing) {
+            ForEach(0..<barCount, id: \.self) { i in
+                let band = bandValue(forBar: i)
+                let shimmer = isFrozen ? 0 : (sin(phase + Double(i) * 0.9) + 1) / 2 * 0.12
+                let mag = min(1.0, band + shimmer)
+                let barH = max(3.0, maxBarHeight * mag)
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [tintColor.opacity(0.55), tintColor],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
+                    )
+                    .frame(width: barWidth, height: barH)
+                    .shadow(color: tintColor.opacity(isFrozen ? 0 : 0.6 * mag), radius: 2.5 * mag)
+            }
+        }
+        .frame(width: CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing, height: 20)
+    }
+
+    /// Mirror-symmetric mapping: centre bar = bass, outer bars = treble.
+    private func bandValue(forBar i: Int) -> Double {
+        guard !bands.isEmpty else { return 0 }
+        let center = (barCount - 1) / 2
+        let idx = min(bands.count - 1, abs(i - center))
+        return Double(bands[idx])
+    }
+}
+
+struct SpinnerView: View {
+    let date: Date
+    
+    var body: some View {
+        let phase = date.timeIntervalSince1970 * 3.6
+        let orbitR: CGFloat = 7.0
+        
+        ZStack {
+            ForEach(0..<4, id: \.self) { i in
+                let angle = phase + Double(i) * (.pi * 2 / 4)
+                let x = cos(angle) * orbitR
+                let y = sin(angle) * orbitR
+                let alpha = 0.3 + 0.7 * Double(i) / 3.0
+                let dotR: CGFloat = 2.5 - CGFloat(i) * 0.3
+                
+                Circle()
+                    .fill(Color.blue.opacity(alpha))
+                    .frame(width: dotR * 2, height: dotR * 2)
+                    .offset(x: x, y: y)
+            }
+        }
+        .frame(width: 20, height: 20)
     }
 }
