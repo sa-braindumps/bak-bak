@@ -1,7 +1,5 @@
 import AppKit
 
-/// A floating pill overlay that shows recording state with live audio waveform.
-/// States: recording (waveform) → transcribing (orbiting) → done (checkmark).
 final class RecordingOverlay {
 
     enum State {
@@ -16,6 +14,8 @@ final class RecordingOverlay {
     private var contentView: OverlayPillView?
     private var animationTimer: Timer?
     private var dismissTimer: Timer?
+    private var doneText: String = ""
+    private var pendingRecordingDuration: TimeInterval = 0
 
     func show() {
         guard window == nil else { return }
@@ -23,6 +23,12 @@ final class RecordingOverlay {
     }
 
     func hide() {
+        doneText = ""
+        setState(.done)
+    }
+
+    func showDone(text: String) {
+        doneText = text
         setState(.done)
     }
 
@@ -30,7 +36,8 @@ final class RecordingOverlay {
         setState(.error(message))
     }
 
-    func showTranscribing() {
+    func showTranscribing(recordingDuration: TimeInterval = 0) {
+        pendingRecordingDuration = recordingDuration
         setState(.transcribing)
     }
 
@@ -44,7 +51,6 @@ final class RecordingOverlay {
         }
     }
 
-    /// Push a live audio level (0...1) into the overlay for waveform rendering
     func injectAudioLevel(_ level: Float) {
         DispatchQueue.main.async { [weak self] in
             self?.contentView?.rawLevel = level
@@ -63,17 +69,22 @@ final class RecordingOverlay {
 
         switch state {
         case .recording:
-            ensureWindow()
+            ensureWindow(width: 180)
+            setWindowWidth(180)
             contentView?.rawLevel = 0
             contentView?.smoothedLevel = 0
             contentView?.isNearLimit = false
+            contentView?.doneText = ""
             contentView?.state = .recording
             startAnimation()
 
         case .transcribing:
-            ensureWindow()
+            ensureWindow(width: 240)
+            setWindowWidth(240)
             contentView?.rawLevel = 0
             contentView?.smoothedLevel = 0
+            contentView?.recordingDuration = pendingRecordingDuration
+            contentView?.transcribingStartDate = Date()
             contentView?.state = .transcribing
             startAnimation()
 
@@ -81,9 +92,14 @@ final class RecordingOverlay {
             guard window != nil else { return }
             animationTimer?.invalidate()
             animationTimer = nil
+            let text = doneText
+            let targetWidth: CGFloat = text.isEmpty ? 180 : 280
+            setWindowWidth(targetWidth, animate: !text.isEmpty)
+            contentView?.doneText = text
             contentView?.state = .done
             contentView?.needsDisplay = true
-            dismissTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            let displayDuration: TimeInterval = text.isEmpty ? 0.6 : 1.5
+            dismissTimer = Timer.scheduledTimer(withTimeInterval: displayDuration, repeats: false) { [weak self] _ in
                 self?.tearDown()
             }
 
@@ -98,7 +114,8 @@ final class RecordingOverlay {
             }
 
         case .error(let msg):
-            ensureWindow()
+            ensureWindow(width: 180)
+            setWindowWidth(180)
             animationTimer?.invalidate()
             animationTimer = nil
             contentView?.errorMessage = msg
@@ -110,10 +127,9 @@ final class RecordingOverlay {
         }
     }
 
-    private func ensureWindow() {
+    private func ensureWindow(width: CGFloat) {
         guard window == nil else { return }
 
-        let width: CGFloat = 180
         let height: CGFloat = 44
 
         guard let screen = NSScreen.main else { return }
@@ -135,11 +151,20 @@ final class RecordingOverlay {
         win.ignoresMouseEvents = false
 
         let pill = OverlayPillView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        pill.autoresizingMask = [.width, .height]
         win.contentView = pill
 
         window = win
         contentView = pill
         win.orderFront(nil)
+    }
+
+    private func setWindowWidth(_ width: CGFloat, animate: Bool = false) {
+        guard let win = window, let screen = NSScreen.main else { return }
+        guard abs(win.frame.width - width) > 1 else { return }
+        let newX = screen.frame.midX - width / 2
+        let newFrame = NSRect(x: newX, y: win.frame.minY, width: width, height: 44)
+        win.setFrame(newFrame, display: true, animate: animate)
     }
 
     private func startAnimation() {
@@ -163,8 +188,11 @@ final class RecordingOverlay {
         window?.orderOut(nil)
         window = nil
         contentView = nil
+        doneText = ""
     }
 }
+
+// MARK: - OverlayPillView
 
 private class OverlayPillView: NSView {
 
@@ -182,6 +210,9 @@ private class OverlayPillView: NSView {
     var rawLevel: Float = 0
     var smoothedLevel: Float = 0
     var isNearLimit = false
+    var doneText: String = ""
+    var recordingDuration: TimeInterval = 0
+    var transcribingStartDate: Date?
 
     private let barCount = 9
     private let barWidth: CGFloat = 3
@@ -272,31 +303,97 @@ private class OverlayPillView: NSView {
     // MARK: - Transcribing
 
     private func drawTranscribing(_ ctx: CGContext) {
-        let centerX: CGFloat = 24
+        let elapsed = transcribingStartDate.map { Date().timeIntervalSince($0) } ?? 0
+        let isFrozen = elapsed < 0.15
+
+        let centerX: CGFloat = 20
         let centerY = bounds.midY
-        let orbitR: CGFloat = 7
 
-        ctx.saveGState()
-        ctx.translateBy(x: centerX, y: centerY)
-
-        for i in 0..<4 {
-            let angle = animationPhase * 1.2 + CGFloat(i) * (.pi * 2 / 4)
-            let x = cos(angle) * orbitR
-            let y = sin(angle) * orbitR
-            let alpha = 0.3 + 0.7 * CGFloat(i) / 3.0
-            let dotR: CGFloat = 2.5 - CGFloat(i) * 0.3
-            ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(alpha).cgColor)
-            ctx.fillEllipse(in: CGRect(x: x - dotR, y: y - dotR, width: dotR * 2, height: dotR * 2))
+        if isFrozen {
+            // Waveform freeze: show the captured audio shape briefly before the spinner
+            drawFrozenWaveform(ctx)
+        } else {
+            let orbitR: CGFloat = 7
+            ctx.saveGState()
+            ctx.translateBy(x: centerX, y: centerY)
+            for i in 0..<4 {
+                let angle = animationPhase * 1.2 + CGFloat(i) * (.pi * 2 / 4)
+                let x = cos(angle) * orbitR
+                let y = sin(angle) * orbitR
+                let alpha = 0.3 + 0.7 * CGFloat(i) / 3.0
+                let dotR: CGFloat = 2.5 - CGFloat(i) * 0.3
+                ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(alpha).cgColor)
+                ctx.fillEllipse(in: CGRect(x: x - dotR, y: y - dotR, width: dotR * 2, height: dotR * 2))
+            }
+            ctx.restoreGState()
         }
 
-        ctx.restoreGState()
-        drawText("Transcribing...", at: 40, ctx: ctx, color: NSColor(white: 0.75, alpha: 1))
+        // "Got 4.2s  Transcribing  1.2s" — confirms audio was captured + shows live elapsed
+        let durationStr = formatDuration(recordingDuration)
+        let visibleElapsed = max(0, elapsed - 0.15)
+        let elapsedStr = formatDuration(visibleElapsed)
+
+        let label = NSMutableAttributedString()
+        label.append(NSAttributedString(
+            string: "Got \(durationStr)  ",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: NSColor(white: 0.5, alpha: 1)
+            ]
+        ))
+        label.append(NSAttributedString(
+            string: isFrozen ? "Captured" : "Transcribing",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.systemBlue.withAlphaComponent(0.9)
+            ]
+        ))
+        if !isFrozen && visibleElapsed > 0 {
+            label.append(NSAttributedString(
+                string: "  \(elapsedStr)",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                    .foregroundColor: NSColor.systemBlue.withAlphaComponent(0.5)
+                ]
+            ))
+        }
+
+        let labelSize = label.size()
+        let labelRect = CGRect(
+            x: 36,
+            y: centerY - labelSize.height / 2,
+            width: bounds.width - 44,
+            height: labelSize.height
+        )
+        label.draw(in: labelRect)
+    }
+
+    private func drawFrozenWaveform(_ ctx: CGContext) {
+        let tintColor = NSColor.systemBlue
+        let startX: CGFloat = 8
+        let centerY = bounds.midY
+        let level = CGFloat(smoothedLevel)
+
+        for i in 0..<barCount {
+            let x = startX + CGFloat(i) * (barWidth + barSpacing)
+            let phase = CGFloat(i) * 0.7
+            let wave = (sin(phase) + 1) / 2
+            let combined = wave * 0.4 + level * 0.6
+            let barH = max(3, maxBarHeight * combined)
+
+            let barRect = CGRect(x: x, y: centerY - barH / 2, width: barWidth, height: barH)
+            let barRadius = barWidth / 2
+            let barPath = CGPath(roundedRect: barRect, cornerWidth: barRadius, cornerHeight: barRadius, transform: nil)
+            ctx.setFillColor(tintColor.withAlphaComponent(CGFloat(0.4 + 0.4 * combined)).cgColor)
+            ctx.addPath(barPath)
+            ctx.fillPath()
+        }
     }
 
     // MARK: - Done
 
     private func drawDone(_ ctx: CGContext) {
-        let center = CGPoint(x: 24, y: bounds.midY)
+        let center = CGPoint(x: 20, y: bounds.midY)
         let r: CGFloat = 8
         ctx.setFillColor(NSColor.systemGreen.withAlphaComponent(0.15).cgColor)
         ctx.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
@@ -310,7 +407,21 @@ private class OverlayPillView: NSView {
         ctx.addLine(to: CGPoint(x: center.x + 4, y: center.y + 3))
         ctx.strokePath()
 
-        drawText("Done", at: 40, ctx: ctx, color: NSColor.systemGreen)
+        if doneText.isEmpty {
+            drawText("Done", at: 36, ctx: ctx, color: NSColor.systemGreen)
+        } else {
+            let maxChars = 32
+            let snippet = doneText.count > maxChars
+                ? String(doneText.prefix(maxChars)) + "\u{2026}"
+                : doneText
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11.5, weight: .regular),
+                .foregroundColor: NSColor(white: 0.88, alpha: 1)
+            ]
+            let size = (snippet as NSString).size(withAttributes: attrs)
+            let rect = CGRect(x: 36, y: bounds.midY - size.height / 2, width: bounds.width - 44, height: size.height)
+            (snippet as NSString).draw(in: rect, withAttributes: attrs)
+        }
     }
 
     // MARK: - Discarded
@@ -358,6 +469,11 @@ private class OverlayPillView: NSView {
     }
 
     // MARK: - Helpers
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        if seconds < 10 { return String(format: "%.1fs", seconds) }
+        return "\(Int(seconds.rounded()))s"
+    }
 
     private func drawText(_ text: String, at x: CGFloat, ctx: CGContext, color: NSColor) {
         let attrs: [NSAttributedString.Key: Any] = [

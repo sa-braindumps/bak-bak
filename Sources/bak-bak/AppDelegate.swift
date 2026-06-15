@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = RecordingOverlay()
     private let profileStore = ProfileStore()
     private var dashboard: DashboardWindow?
+    private var recordingStartDate: Date = Date()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -154,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleRecordingStart() {
+        recordingStartDate = Date()
         if (try? profileStore.read())?.soundEnabled != false {
             NSSound(named: "Tink")?.play()
         }
@@ -165,15 +167,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleRecordingStop() {
         coordinator.stopRecording(
             onWillTranscribe: { [weak self] in
-                self?.playReleaseSound()
-                self?.overlay.showTranscribing()
+                guard let self = self else { return }
+                self.playReleaseSound()
+                let duration = Date().timeIntervalSince(self.recordingStartDate)
+                self.overlay.showTranscribing(recordingDuration: duration)
             },
             completion: { [weak self] result in
                 guard let self = self else { return }
                 self.hotkeyMonitor.resetToggleState()
                 switch result {
-                case .success:
-                    self.overlay.hide()
+                case .success(let text):
+                    self.overlay.showDone(text: text)
                     self.updateStatusItem(state: .idle)
                 case .failure(let error):
                     if let coordError = error as? AppCoordinator.CoordinatorError,

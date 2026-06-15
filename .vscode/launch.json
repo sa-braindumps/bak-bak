@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bak-bak}",
+            "name": "Debug bak-bak",
+            "target": "bak-bak",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug bak-bak"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:bak-bak}",
+            "name": "Release bak-bak",
+            "target": "bak-bak",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release bak-bak"
+        }
+    ]
+}

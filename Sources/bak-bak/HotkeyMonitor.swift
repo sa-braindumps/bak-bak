@@ -25,6 +25,7 @@ public final class HotkeyMonitor {
             case "option": flags.insert(.option)
             case "command": flags.insert(.command)
             case "shift": flags.insert(.shift)
+            case "fn": flags.insert(.function)
             default: break
             }
         }

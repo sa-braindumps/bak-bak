@@ -66,7 +66,8 @@ final class DashboardViewModel: ObservableObject {
         "command+option",
         "command+shift",
         "control+shift",
-        "control+command"
+        "control+command",
+        "fn"
     ]
 
     static func hotkeySymbols(_ combo: String) -> String {

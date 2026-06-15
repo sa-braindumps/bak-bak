@@ -128,8 +128,8 @@ struct SettingsView: View {
                                 .tag(combo)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 280)
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 120)
                 }
 
                 HStack(spacing: AppSpacing.sm) {
