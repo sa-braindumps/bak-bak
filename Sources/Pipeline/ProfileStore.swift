@@ -16,6 +16,7 @@ public final class ProfileStore: @unchecked Sendable {
         public var correctionWindowSecs: Int
         public var soundEnabled: Bool
         public var removeFillers: Bool
+        public var transcription: TranscriptionConfig = .default
 
         public init(
             vocab: [String: String] = [:],
@@ -154,6 +155,14 @@ public final class ProfileStore: @unchecked Sendable {
             profile.soundEnabled = general["sound_enabled"]?.bool ?? true
         }
 
+        if let transcription = toml["transcription"]?.table {
+            profile.transcription = TranscriptionConfig(
+                baseURL: transcription["base_url"]?.string ?? TranscriptionConfig.openAIBaseURL,
+                model: transcription["model"]?.string ?? TranscriptionConfig.defaultModel,
+                apiKey: transcription["api_key"]?.string
+            )
+        }
+
         return profile
     }
 
@@ -244,6 +253,19 @@ public final class ProfileStore: @unchecked Sendable {
 
     public func setRecordingMode(_ mode: String) throws {
         try edit { $0.set("recording_mode", to: TOMLLineEditor.string(mode), in: "hotkey") }
+    }
+
+    /// Save `[transcription]`. A nil `apiKey` removes the service-specific key.
+    public func setTranscription(_ config: TranscriptionConfig) throws {
+        try edit { editor in
+            editor.set("base_url", to: TOMLLineEditor.string(config.baseURL), in: "transcription")
+            editor.set("model", to: TOMLLineEditor.string(config.model), in: "transcription")
+            if let key = config.apiKey, !key.isEmpty {
+                editor.set("api_key", to: TOMLLineEditor.string(key), in: "transcription")
+            } else {
+                editor.remove("api_key", in: "transcription")
+            }
+        }
     }
 
     public func setSoundEnabled(_ enabled: Bool) throws {

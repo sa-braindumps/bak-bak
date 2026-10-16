@@ -192,6 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleRecordingStart() {
         recordingStartDate = Date()
+        if let problem = coordinator.preflightError() {
+            handle(.cancel)
+            overlay.showError(problem.localizedDescription)
+            updateStatusItem(state: .error(problem.localizedDescription))
+            return
+        }
         do {
             try coordinator.startRecording()
         } catch {

@@ -26,7 +26,9 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 - Throws away recordings that are just silence.
 - Can launch at login.
 - On first run it asks for Accessibility access and opens settings if there's no API key yet.
-- You bring your own OpenAI key. No subscription and no word limit. It costs about $0.003 a minute.
+- You bring your own key. No subscription and no word limit. With the default OpenAI model it costs about $0.003 a minute.
+- Works with other speech-to-text services that speak the OpenAI API. Groq is built in as a preset and is much faster; you can also point it at any compatible URL. Pick one in Dashboard → Settings → Transcription. Your OpenAI key is only ever sent to OpenAI.
+- Tells you what actually went wrong (wrong key, model doesn't exist, offline, out of credit) instead of a generic error, and checks the key before you start talking.
 
 ## Setup
 
@@ -58,6 +60,8 @@ The first time it runs, macOS will ask for **Microphone** and **Accessibility** 
 | Turn on filler removal | Set `remove_fillers = true` under `[cleanup]` in `~/.bak-bak/profile.toml` |
 | Change the shortcut | Dashboard → Settings → Hotkey |
 | See history | `swift run bak-bak history`, or Dashboard → Home |
+| Switch speech service | Dashboard → Settings → Transcription |
+| Test a recording without the mic | `bak-bak transcribe clip.m4a --verbose` |
 | Check what's wrong | `swift run bak-bak doctor`, or menu bar → Run Doctor |
 | Open the dashboard | Menu bar icon → Dashboard (or Cmd+,) |
 
@@ -80,7 +84,7 @@ Everything lives in `~/.bak-bak/`:
 
 | File | Format | What's in it |
 |------|--------|--------------|
-| `profile.toml` | TOML | API key, vocabulary, snippets, settings |
+| `profile.toml` | TOML | API keys, speech service, vocabulary, snippets, settings |
 | `history.jsonl` | JSON Lines | Every dictation with its time, latency and model |
 
 You can edit `profile.toml` by hand. Changes apply on the next dictation, and comments you add are kept when the app writes to the file. Running `bak-bak setup` again only updates your API key; it won't touch your words, snippets or settings.

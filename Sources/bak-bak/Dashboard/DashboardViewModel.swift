@@ -60,6 +60,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var launchAtLogin: Bool = false
     @Published var hotkeyModifiers: String = "control+option"
     @Published var recordingMode: String = "hold"
+    @Published var transcription: TranscriptionConfig = .default
 
     static let availableHotkeys = [
         "control+option",
@@ -97,6 +98,7 @@ final class DashboardViewModel: ObservableObject {
             soundEnabled = profile.soundEnabled
             hotkeyModifiers = profile.hotkeyModifiers
             recordingMode = profile.recordingMode
+            transcription = profile.transcription
         }
         apiKey = (try? profileStore.getApiKey()) ?? ""
         if #available(macOS 13.0, *) {
@@ -155,6 +157,11 @@ final class DashboardViewModel: ObservableObject {
     func saveApiKey(_ key: String) {
         try? profileStore.setApiKey(key)
         apiKey = key
+    }
+
+    func saveTranscription(_ config: TranscriptionConfig) {
+        try? profileStore.setTranscription(config)
+        transcription = config
     }
 
     func saveSoundEnabled(_ enabled: Bool) {

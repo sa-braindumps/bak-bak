@@ -1,26 +1,42 @@
 import AudioToolbox
 import Foundation
 
-/// Sends audio data to the OpenAI transcription API via a single multipart POST.
-/// No SDK — raw URLSession. Measures round-trip latency for `doctor`.
-public final class Transcriber: @unchecked Sendable {
+/// Anything that can turn recorded audio (16 kHz mono Float32 PCM) into text.
+/// Today that's `Transcriber` for OpenAI-compatible services; an on-device
+/// engine can slot in later without touching the rest of the pipeline.
+public protocol TranscriptionEngine: Sendable {
+    func transcribe(audioData: Data) async throws -> Transcriber.TranscriptionResult
+}
 
-    public enum TranscriptionError: Error, LocalizedError {
+/// Sends audio to an OpenAI-compatible `/audio/transcriptions` endpoint
+/// (OpenAI, Groq, …) in a single multipart POST. No SDK. Measures round-trip
+/// latency for `doctor`.
+public final class Transcriber: TranscriptionEngine, @unchecked Sendable {
+
+    public enum TranscriptionError: Error, LocalizedError, Equatable {
         case noNetwork
-        case apiKeyRejected
-        case rateLimited
-        case serverError
         case timeout
+        case network(String)
+        case apiKeyRejected(host: String)
+        case rateLimited
+        case serverError(Int)
+        case badRequest(String)
+        case modelNotFound(String)
+        case invalidEndpoint(String)
         case emptyResponse
 
         public var errorDescription: String? {
             switch self {
-            case .noNetwork: return "no network"
-            case .apiKeyRejected: return "API key rejected"
-            case .rateLimited: return "rate limited or out of quota"
-            case .serverError: return "Whisper API error (5xx)"
-            case .timeout: return "transcription timed out"
-            case .emptyResponse: return nil
+            case .noNetwork: return "No internet connection"
+            case .timeout: return "Transcription timed out"
+            case .network(let detail): return "Network error: \(detail)"
+            case .apiKeyRejected(let host): return "API key rejected by \(host)"
+            case .rateLimited: return "Rate limited or out of credit"
+            case .serverError(let code): return "Transcription service error (\(code))"
+            case .badRequest(let detail): return "Request rejected: \(detail)"
+            case .modelNotFound(let detail): return "Model not found: \(detail)"
+            case .invalidEndpoint(let url): return "Not a valid service URL: \(url)"
+            case .emptyResponse: return "The service sent back no text"
             }
         }
     }
@@ -32,45 +48,49 @@ public final class Transcriber: @unchecked Sendable {
 
     private let apiKey: String
     private let prompt: String
+    private let config: TranscriptionConfig
     private let session: URLSession
-    private let endpoint = "https://api.openai.com/v1/audio/transcriptions"
     public static let requestTimeout: TimeInterval = 30.0
 
     /// - Parameter prompt: context for the model; see `TranscriptionPrompt`.
-    public init(apiKey: String, prompt: String = TranscriptionPrompt.base, session: URLSession = .shared) {
+    public init(
+        apiKey: String,
+        prompt: String = TranscriptionPrompt.base,
+        config: TranscriptionConfig = .default,
+        session: URLSession = .shared
+    ) {
         self.apiKey = apiKey
         self.prompt = prompt
+        self.config = config
         self.session = session
     }
 
-    /// Transcribe audio data using the Whisper API.
     public func transcribe(audioData: Data) async throws -> TranscriptionResult {
+        guard let endpoint = config.endpoint else {
+            throw TranscriptionError.invalidEndpoint(config.baseURL)
+        }
         let startTime = Date()
 
         let boundary = UUID().uuidString
-        var request = URLRequest(url: URL(string: endpoint)!)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = Self.requestTimeout
 
         var body = Data()
+        func field(_ name: String, _ value: String) {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
+            body.append(Data("\(value)\r\n".utf8))
+        }
 
-        // Model field
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"model\"\r\n\r\n".utf8))
-        body.append(Data("gpt-4o-mini-transcribe\r\n".utf8))
-
+        field("model", config.model)
         // Language hint — prevents misdetection cascades that cause hallucinations
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"language\"\r\n\r\n".utf8))
-        body.append(Data("en\r\n".utf8))
-
+        field("language", "en")
         // Prompt — steers the model toward dictation-style output and the
         // user's vocabulary
-        body.append(Data("--\(boundary)\r\n".utf8))
-        body.append(Data("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".utf8))
-        body.append(Data("\(prompt)\r\n".utf8))
+        field("prompt", prompt)
 
         // Audio file — convert Float32 PCM to FLAC (falls back to WAV on failure)
         let audioFileData = convertToFLAC(audioData)
@@ -81,45 +101,67 @@ public final class Transcriber: @unchecked Sendable {
         body.append(Data("Content-Type: audio/\(isFlac ? "flac" : "wav")\r\n\r\n".utf8))
         body.append(fileData)
         body.append(Data("\r\n".utf8))
-
-        // Close boundary
         body.append(Data("--\(boundary)--\r\n".utf8))
 
         request.httpBody = body
 
         let data: Data
         let response: URLResponse
-
         do {
             (data, response) = try await session.data(for: request)
-        } catch let error as URLError where error.code == .notConnectedToInternet {
-            throw TranscriptionError.noNetwork
-        } catch {
-            throw TranscriptionError.timeout
+        } catch let error as URLError {
+            throw Self.map(error)
         }
 
         let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw TranscriptionError.noNetwork
+            throw TranscriptionError.network("no HTTP response")
         }
+        return try Self.parse(statusCode: httpResponse.statusCode, body: data, host: config.host, latencyMs: latencyMs)
+    }
 
-        switch httpResponse.statusCode {
+    // MARK: - Response handling
+
+    static func map(_ error: URLError) -> TranscriptionError {
+        switch error.code {
+        case .timedOut:
+            return .timeout
+        case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
+             .cannotConnectToHost, .dnsLookupFailed, .dataNotAllowed:
+            return .noNetwork
+        default:
+            return .network(error.localizedDescription)
+        }
+    }
+
+    static func parse(statusCode: Int, body: Data, host: String, latencyMs: Int) throws -> TranscriptionResult {
+        switch statusCode {
         case 200:
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                   let text = json["text"] as? String else {
                 throw TranscriptionError.emptyResponse
             }
             return TranscriptionResult(text: text, latencyMs: latencyMs)
-        case 401:
-            throw TranscriptionError.apiKeyRejected
+        case 401, 403:
+            throw TranscriptionError.apiKeyRejected(host: host)
+        case 404:
+            throw TranscriptionError.modelNotFound(errorMessage(in: body) ?? "HTTP 404")
         case 429:
             throw TranscriptionError.rateLimited
         case 500...599:
-            throw TranscriptionError.serverError
+            throw TranscriptionError.serverError(statusCode)
         default:
-            throw TranscriptionError.noNetwork
+            throw TranscriptionError.badRequest(errorMessage(in: body) ?? "HTTP \(statusCode)")
         }
+    }
+
+    /// OpenAI-style `{"error": {"message": "..."}}`.
+    private static func errorMessage(in body: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let error = json["error"] as? [String: Any],
+              let message = error["message"] as? String, !message.isEmpty else { return nil }
+        return message
     }
 
     /// Convert raw Float32 PCM data to FLAC format using AudioToolbox.

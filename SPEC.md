@@ -97,19 +97,25 @@ Each feature lists **Behavior**, **Edge cases**, and **Failure modes**. The diff
 - **Modifier-only detection proves flaky on some keyboards/layouts.** Documented fallback: a small Carbon `RegisterEventHotKey` registration. This is a last resort — the primary path is `CGEvent` tap + `NSEvent` global monitor.
 - **Buffer grows beyond a safe RAM ceiling** (very long dictation): recording stops, error state shown with reason "recording too long", buffer flushed and transcribed up to that point. No crash, no disk spill.
 
-### 3.2 Transcription (OpenAI Whisper API)
+### 3.2 Transcription (any OpenAI-compatible service)
 
-**Behavior.** On key release, the in-memory audio buffer is encoded and uploaded via a single multipart `URLSession` POST to the OpenAI Whisper endpoint, using the one API key from setup. No SDK. The round-trip latency is measured and stored for `bak-bak doctor`.
+**Behavior.** On key release, the in-memory audio buffer is encoded (FLAC, WAV fallback) and uploaded in a single multipart `URLSession` POST to `<base_url>/audio/transcriptions`. No SDK. The service and model come from `[transcription]` (§5.4c); the default is OpenAI `gpt-4o-mini-transcribe`, which is what v0.1 always used. Engines sit behind the `TranscriptionEngine` protocol so an on-device engine can be added without touching the rest of the pipeline. The round-trip latency is measured and stored for `bak-bak doctor`.
+
+**Keys.** OpenAI uses `[general].api_key`. Any other service must have its own `[transcription].api_key`: the OpenAI key is **never** sent to another host. The key is checked *before* recording starts, so a missing key is reported immediately, not after the user has talked.
 
 **Edge cases.**
-- **No network.** Error state, reason "no network"; audio buffer discarded (never retried to disk).
-- **Slow response.** The transcribing state (pulse) persists for the full round-trip. A request timeout (default 30 s) trips the error state with reason "transcription timed out".
+- **No network** (offline, DNS failure, host unreachable). Error state, reason "No internet connection"; audio buffer discarded (never retried to disk). Other connection errors show the system's own description.
+- **Slow response.** The transcribing state (pulse) persists for the full round-trip. A request timeout (default 30 s) trips the error state with reason "Transcription timed out".
 - **Empty transcript returned.** Treated as a no-op — nothing injected, return to idle. No error (Whisper legitimately returns empty for silence/noise).
 
 **Failure modes.**
-- **401 invalid/expired key** → error state, reason "API key rejected"; suggests `bak-bak setup`.
-- **429 rate limit / quota** → error state, reason "rate limited or out of quota".
-- **5xx** → error state, reason "Whisper API error (5xx)". No automatic retry in v0.1 (avoids silently double-charging the user's key).
+- **401 / 403** → "API key rejected by <host>".
+- **404** → "Model not found: <service's message>".
+- **429** → "Rate limited or out of credit".
+- **5xx** → "Transcription service error (<code>)". No automatic retry (avoids silently double-charging the user's key).
+- **Any other 4xx** (400, 413, …) → "Request rejected: <service's message>".
+- **200 without text** → "The service sent back no text".
+- **No key for a non-OpenAI service** → "No API key for <host>. Add it in Dashboard → Settings → Transcription".
 
 ### 3.3 Deterministic vocabulary substitution — *the substitution layer*
 
@@ -262,6 +268,15 @@ Manages the `[snippets]` table (§5.1b). Three subcommands, all comment-preservi
 
 Like `vocab list`, `snippet list` is proof of no hidden state — it prints exactly what is in the file.
 
+### 4.6 `bak-bak transcribe <file>`
+
+Runs an audio file (wav, aiff, m4a, mp3, flac…) through the same steps as a dictation (the configured service and model, the vocabulary prompt, then fillers, `[vocab]` and `[snippets]`) and prints the final text instead of typing it. Only cursor injection is skipped.
+
+- `--verbose` also prints the service, model, latency, prompt and raw transcript.
+- `--profile <path>` uses another `profile.toml`, for testing without touching the real one.
+
+This is how the transcription path is tested end to end without a microphone, e.g. with audio from `say -o test.aiff "…"`.
+
 ---
 
 ## 5. `profile.toml` specification
@@ -307,6 +322,16 @@ The snippet stage runs **after** `[vocab]` substitution and **before** injection
 | `remove_fillers` | bool | `false` | When `true`, a fixed set of disfluency tokens (`um, umm, uh, uhh, erm, er, ah, hmm, mm`) is stripped from the raw transcript as **whole tokens only** (case-insensitive), spacing/punctuation is tidied, and a leading-filler-stripped first letter is re-capitalized. This is deterministic string surgery — not a model call. Real words (`like`, `so`, `you know`) are never removed, and substrings are never gutted (`summary` keeps its `um`). Off by default. |
 
 The cleanup stage runs on the raw transcript **before** `[vocab]` substitution, so vocabulary still matches the cleaned text. Unknown keys in `[cleanup]` are preserved on write (this table is an extension point).
+
+### 5.4c `[transcription]`
+
+| Key | Type | Default | Constraints |
+|-----|------|---------|-------------|
+| `base_url` | string | `"https://api.openai.com/v1"` | Any OpenAI-compatible API root; `/audio/transcriptions` is appended. Must be http(s). |
+| `model` | string | `"gpt-4o-mini-transcribe"` | Sent as-is. Groq: `whisper-large-v3-turbo`. |
+| `api_key` | string | *(absent)* | Required for any host other than `api.openai.com`. Removed when switching back to OpenAI in the Dashboard. |
+
+The whole table is optional; a missing table means the OpenAI default. The Dashboard → Settings → Transcription card offers presets (OpenAI mini, OpenAI full, Groq) and a Custom option.
 
 ### 5.5 Defaults and constraints summary
 

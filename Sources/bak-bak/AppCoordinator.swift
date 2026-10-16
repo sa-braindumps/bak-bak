@@ -8,14 +8,12 @@ import Pipeline
 public final class AppCoordinator: @unchecked Sendable {
 
     public enum CoordinatorError: Error, LocalizedError, Equatable {
-        case apiKeyNotSet
         case micAccessDenied
         case emptyRecording
         case silenceDetected
 
         public var errorDescription: String? {
             switch self {
-            case .apiKeyNotSet: return "API key not set — open Dashboard → Settings"
             case .micAccessDenied: return "Mic access denied"
             case .emptyRecording: return nil
             case .silenceDetected: return nil
@@ -54,6 +52,18 @@ public final class AppCoordinator: @unchecked Sendable {
             self?.onNearLimit?()
         }
         try audioRecorder.startRecording()
+    }
+
+    /// Why a dictation can't be transcribed right now (e.g. no key for the
+    /// chosen service), or nil if it can. Checked before recording starts so
+    /// nobody talks for a minute only to be told the key is missing.
+    public func preflightError() -> Error? {
+        do {
+            _ = try Transcriber.make(profile: try? profileStore.read(), openAIKey: try? profileStore.getApiKey())
+            return nil
+        } catch {
+            return error
+        }
     }
 
     /// Stop recording and throw the audio away. Nothing is sent or typed.
@@ -95,19 +105,17 @@ public final class AppCoordinator: @unchecked Sendable {
             return
         }
 
-        guard let apiKey = try? profileStore.getApiKey(), !apiKey.isEmpty else {
-            completion(.failure(CoordinatorError.apiKeyNotSet))
+        let profileBefore = try? profileStore.read()
+        let model = profileBefore?.transcription.model ?? TranscriptionConfig.defaultModel
+        let transcriber: Transcriber
+        do {
+            transcriber = try Transcriber.make(profile: profileBefore, openAIKey: try? profileStore.getApiKey())
+        } catch {
+            completion(.failure(error))
             return
         }
 
         onWillTranscribe?()
-
-        let profileForPrompt = try? profileStore.read()
-        let prompt = TranscriptionPrompt.build(
-            vocab: profileForPrompt?.vocab ?? [:],
-            order: profileForPrompt?.vocabOrder ?? []
-        )
-        let transcriber = Transcriber(apiKey: apiKey, prompt: prompt)
 
         Task {
             do {
@@ -138,16 +146,8 @@ public final class AppCoordinator: @unchecked Sendable {
                 }
 
                 // ── Normal path ───────────────────────────────────────────────
-                // rawText → DisfluencyFilter (if enabled) → Substitutor(vocab)
-                //         → SnippetExpander(snippets) → inject → history.
-                let profile = try? profileStore.read()
-                let vocab = profile?.vocab ?? [:]
-                let snippets = profile?.snippets ?? [:]
-                let removeFillers = profile?.removeFillers ?? false
-
-                let cleaned = removeFillers ? DisfluencyFilter.apply(rawText) : rawText
-                let substituted = Substitutor.apply(cleaned, vocab: vocab)
-                let correctedText = SnippetExpander.apply(substituted, snippets: snippets)
+                // Re-read the profile: a correction may have just added vocab.
+                let correctedText = TextPipeline.process(rawText, profile: try? profileStore.read())
 
                 let injectionResult = injector.inject(correctedText)
                 let method: String
@@ -157,7 +157,7 @@ public final class AppCoordinator: @unchecked Sendable {
                 case .failure(let r): method = "failed:\(r)"
                 }
 
-                history.append(raw: rawText, corrected: correctedText, latencyMs: result.latencyMs, injectionMethod: method)
+                history.append(raw: rawText, corrected: correctedText, latencyMs: result.latencyMs, model: model, injectionMethod: method)
 
                 switch injectionResult {
                 case .inserted:

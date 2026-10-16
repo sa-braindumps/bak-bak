@@ -21,7 +21,8 @@ struct SettingsView: View {
                 }
 
                 HStack(alignment: .top, spacing: AppSpacing.md) {
-                    modelSection
+                    TranscriptionSettingsView(viewModel: viewModel)
+                        .settingsCard()
                     dataSection
                 }
             }
@@ -153,20 +154,6 @@ struct SettingsView: View {
                     : "Press keys once to start recording. Press again to stop and transcribe.")
                     .font(.appCaption)
                     .foregroundColor(AppColors.textMuted)
-            }
-        }
-        .settingsCard()
-    }
-
-    // MARK: - Model Section
-
-    private var modelSection: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
-            sectionLabel("Model")
-
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                settingsDetail(label: "Transcription", value: "gpt-4o-mini-transcribe")
-                settingsDetail(label: "Cost", value: "$0.003 / minute")
             }
         }
         .settingsCard()
