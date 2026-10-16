@@ -1,31 +1,34 @@
 # Bak-Bak
 
-*बक-बक* — Hindi for chattering. A Mac-native voice dictation app where your corrections persist and compound.
+*बक-बक* is Hindi for chattering. Bak-Bak is a voice dictation app for the Mac that remembers your corrections.
 
-Hold **Control+Option**, speak, release. Your words appear wherever your cursor is — in any app. Corrections you teach it ("no, kubectl is kubectl") stick forever in a plain-text config file you own.
+Hold **Control+Option**, speak, and let go. What you said gets typed wherever your cursor is, in any app. When it gets a word wrong, say "no, kubectl is kubectl" and it fixes it from then on. Corrections live in a plain text file you own.
 
-## Features
+## What it does
 
-- **Universal paste** — Works in browsers, Electron apps, native macOS fields
-- **Vocabulary that learns** — Say "no, X is Y" to teach corrections by voice
-- **Configurable hotkey** — Choose your shortcut (Control+Option, Command+Option, etc.)
-- **Hold or toggle mode** — Hold keys to record, or press once to start / again to stop
-- **Transcription history** — Every dictation logged to `~/.bak-bak/history.jsonl`
-- **Dashboard** — SwiftUI window with history timeline, usage insights, dictionary, and settings
-- **Sound feedback** — Audio cues on hotkey press/release (configurable)
-- **Low hallucination** — Uses `gpt-4o-mini-transcribe` with language hints
-- **Floating overlay** — Pill showing live waveform while recording, with 60s auto-stop
-- **FLAC compression** — Smaller uploads, faster transcription (falls back to WAV)
-- **Silence detection** — Discards empty recordings automatically
-- **Launch at login** — Optional, via macOS Login Items
-- **First-run setup** — Auto-opens settings when API key is missing, prompts for Accessibility
-- **Bring your own key** — No subscriptions, no word limits, ~$0.003/minute
+- Types into pretty much anything: browsers, Electron apps, regular Mac text fields.
+- Learns your words. Say "no, X is Y" right after a dictation and that fix is applied every time after.
+- Snippets. Say "my email" on its own and it types your full email address. Good for addresses, sign-offs, anything you type a lot.
+- Voice commands for a few seconds after each dictation: "scratch that" deletes what was just typed, "new line" and "new paragraph" add line breaks, and "select that" highlights it.
+- Can strip "um", "uh" and similar filler words. Off by default.
+- Pick your own shortcut (Control+Option, Command+Option, and so on).
+- Hold the keys to record, or switch to toggle mode: press once to start, again to stop.
+- Keeps a history of every dictation in `~/.bak-bak/history.jsonl`.
+- A dashboard window with your history, usage stats, dictionary and settings.
+- Optional sounds when recording starts and stops.
+- Uses `gpt-4o-mini-transcribe` with a language hint to cut down on made-up text when you're quiet.
+- A small floating pill with a live waveform while you talk. Recording stops on its own after 60 seconds.
+- Compresses audio to FLAC before upload so it's smaller and faster (falls back to WAV).
+- Throws away recordings that are just silence.
+- Can launch at login.
+- On first run it asks for Accessibility access and opens settings if there's no API key yet.
+- You bring your own OpenAI key. No subscription and no word limit. It costs about $0.003 a minute.
 
 ## Setup
 
-### Requirements
+You need:
 - macOS 13 (Ventura) or later
-- OpenAI API key
+- An OpenAI API key
 - Swift 5.9+
 
 ### Build and install
@@ -36,22 +39,26 @@ git clone <repo-url> && cd bak-bak
 open /Applications/Bak-Bak.app
 ```
 
-On first launch, grant **Microphone** and **Accessibility** permissions when prompted.
-
-On first launch, the app will prompt for Accessibility permission and open Dashboard → Settings so you can enter your API key.
+The first time it runs, macOS will ask for **Microphone** and **Accessibility** permission. Allow both. The app then opens Dashboard → Settings so you can paste your API key.
 
 ## Usage
 
 | Action | How |
 |--------|-----|
-| Dictate | Hold **Control+Option**, speak, release (or toggle mode: press once to start, again to stop) |
-| Correct | Say "no, X is Y" or "correction: X is Y" |
-| Change shortcut | Dashboard → Settings → Hotkey |
-| View history | `swift run bak-bak history` or Dashboard → Home |
-| Diagnostics | `swift run bak-bak doctor` or menu bar → Run Doctor |
-| Dashboard | Menu bar icon → Dashboard (or Cmd+,) |
+| Dictate | Hold **Control+Option**, speak, let go (or in toggle mode, press once to start and again to stop) |
+| Correct a word | Right after a dictation, say "no, X is Y" or "correction: X is Y" |
+| Undo, new line, select | Right after a dictation, say "scratch that", "new line", "new paragraph" or "select that" |
+| Add a snippet | `bak-bak snippet add "my email" "you@example.com"` |
+| List or remove snippets | `bak-bak snippet list`, `bak-bak snippet remove "my email"` |
+| Turn on filler removal | Set `remove_fillers = true` under `[cleanup]` in `~/.bak-bak/profile.toml` |
+| Change the shortcut | Dashboard → Settings → Hotkey |
+| See history | `swift run bak-bak history`, or Dashboard → Home |
+| Check what's wrong | `swift run bak-bak doctor`, or menu bar → Run Doctor |
+| Open the dashboard | Menu bar icon → Dashboard (or Cmd+,) |
 
-## Architecture
+Corrections and voice commands only count for a short window after each dictation (10 seconds by default, `correction_window_secs` in `profile.toml`). Anything said after that is typed as normal text.
+
+## How it's put together
 
 ```
 Sources/
@@ -60,16 +67,18 @@ Sources/
     Dashboard/       # SwiftUI dashboard views
 ```
 
-Single Swift Package, two dependencies (`TOMLKit`, `swift-argument-parser`). No Xcode project — builds with `swift build`. See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
+It's a single Swift package with two dependencies (`TOMLKit` and `swift-argument-parser`). There's no Xcode project; `swift build` builds it. [ARCHITECTURE.md](./ARCHITECTURE.md) has the details.
 
-## Data
+## Your data
 
-All data lives in `~/.bak-bak/`:
+Everything lives in `~/.bak-bak/`:
 
-| File | Format | Contents |
-|------|--------|----------|
-| `profile.toml` | TOML | API key, vocabulary, settings |
-| `history.jsonl` | JSON Lines | Every transcription with timestamp, latency, model |
+| File | Format | What's in it |
+|------|--------|--------------|
+| `profile.toml` | TOML | API key, vocabulary, snippets, settings |
+| `history.jsonl` | JSON Lines | Every dictation with its time, latency and model |
+
+You can edit `profile.toml` by hand. Changes apply on the next dictation, and comments you add are kept when the app writes to the file.
 
 ## License
 
