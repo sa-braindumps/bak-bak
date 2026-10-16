@@ -323,6 +323,10 @@ The snippet stage runs **after** `[vocab]` substitution and **before** injection
 |-----|------|---------|-------------|
 | `remove_fillers` | bool | `false` | When `true`, a fixed set of disfluency tokens (`um, umm, uh, uhh, erm, er, ah, hmm, mm`) is stripped from the raw transcript as **whole tokens only** (case-insensitive), spacing/punctuation is tidied, and a leading-filler-stripped first letter is re-capitalized. This is deterministic string surgery — not a model call. Real words (`like`, `so`, `you know`) are never removed, and substrings are never gutted (`summary` keeps its `um`). Off by default. |
 
+| `polish` | bool | `false` | When `true`, each dictation of 4+ words (not snippet triggers, not voice commands or corrections) is sent to OpenAI `gpt-4o-mini` with the OpenAI key to fix punctuation, capitals and paragraph breaks and drop fillers and false starts, keeping the speaker's words. Toggle from the menu bar (**Polish Text**) or Dashboard → Settings. Adds ~0.5–1 s. |
+
+**Polish safety.** The transcript is sent inside `<transcript>` tags with instructions that it is speech to clean, never a request. Because a model can still answer instead (in testing, "write me a poem about the ocean" came back as a poem before this was added), a reply with noticeably more words than the input is rejected in code and the unpolished text is used. Any failure (timeout, HTTP error, no OpenAI key) also falls back to the unpolished text, so polish can never lose a dictation. `[vocab]` runs after polish, so taught terms stay correct.
+
 The cleanup stage runs on the raw transcript **before** `[vocab]` substitution, so vocabulary still matches the cleaned text. Unknown keys in `[cleanup]` are preserved on write (this table is an extension point).
 
 ### 5.4c `[transcription]`

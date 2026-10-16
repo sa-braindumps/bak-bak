@@ -16,6 +16,8 @@ public final class ProfileStore: @unchecked Sendable {
         public var correctionWindowSecs: Int
         public var soundEnabled: Bool
         public var removeFillers: Bool
+        /// `[cleanup].polish`: run each dictation through `Polisher`.
+        public var polish: Bool = false
         public var transcription: TranscriptionConfig = .default
 
         public init(
@@ -77,6 +79,9 @@ public final class ProfileStore: @unchecked Sendable {
     [cleanup]
     # Strip um, uh, erm and similar filler words. Off by default.
     remove_fillers = false
+    # Tidy punctuation, capitals and false starts with a small AI model
+    # (gpt-4o-mini, your OpenAI key, ~1s extra). Off by default.
+    polish = false
 
     [hotkey]
     # control, option, command, shift, fn joined with "+"
@@ -140,6 +145,7 @@ public final class ProfileStore: @unchecked Sendable {
 
         if let cleanup = toml["cleanup"]?.table {
             profile.removeFillers = cleanup["remove_fillers"]?.bool ?? false
+            profile.polish = cleanup["polish"]?.bool ?? false
         }
 
         if let hotkey = toml["hotkey"]?.table {
@@ -242,6 +248,11 @@ public final class ProfileStore: @unchecked Sendable {
     /// Toggle deterministic filler removal (`[cleanup].remove_fillers`).
     public func setRemoveFillers(_ enabled: Bool) throws {
         try edit { $0.set("remove_fillers", to: String(enabled), in: "cleanup") }
+    }
+
+    /// Toggle the AI polish pass (`[cleanup].polish`).
+    public func setPolish(_ enabled: Bool) throws {
+        try edit { $0.set("polish", to: String(enabled), in: "cleanup") }
     }
 
     public func setApiKey(_ key: String) throws {

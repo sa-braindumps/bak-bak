@@ -57,6 +57,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var vocab: [String: String] = [:]
     @Published var apiKey: String = ""
     @Published var soundEnabled: Bool = true
+    @Published var polish: Bool = false
     @Published var launchAtLogin: Bool = false
     @Published var hotkeyModifiers: String = "control+option"
     @Published var recordingMode: String = "hold"
@@ -96,6 +97,7 @@ final class DashboardViewModel: ObservableObject {
         if let profile = try? profileStore.read() {
             vocab = profile.vocab
             soundEnabled = profile.soundEnabled
+            polish = profile.polish
             hotkeyModifiers = profile.hotkeyModifiers
             recordingMode = profile.recordingMode
             transcription = profile.transcription
@@ -162,6 +164,11 @@ final class DashboardViewModel: ObservableObject {
     func saveTranscription(_ config: TranscriptionConfig) {
         try? profileStore.setTranscription(config)
         transcription = config
+    }
+
+    func savePolish(_ enabled: Bool) {
+        try? profileStore.setPolish(enabled)
+        polish = enabled
     }
 
     func saveSoundEnabled(_ enabled: Bool) {

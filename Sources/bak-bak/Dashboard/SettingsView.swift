@@ -97,6 +97,14 @@ struct SettingsView: View {
             .font(.appBody)
             .foregroundColor(AppColors.textPrimary)
 
+            Toggle("Polish text with AI (about 1s extra)", isOn: Binding(
+                get: { viewModel.polish },
+                set: { viewModel.savePolish($0) }
+            ))
+            .toggleStyle(.switch)
+            .font(.appBody)
+            .foregroundColor(AppColors.textPrimary)
+
             Toggle("Launch at login", isOn: Binding(
                 get: { viewModel.launchAtLogin },
                 set: { viewModel.setLaunchAtLogin($0) }

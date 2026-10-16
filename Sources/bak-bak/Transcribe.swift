@@ -42,7 +42,8 @@ struct Transcribe: ParsableCommand {
         let audio = try AudioFileLoader.loadPCM(from: URL(fileURLWithPath: file))
         let transcriber = try Transcriber.make(profile: profile, openAIKey: try? store.getApiKey())
         let result = try await transcriber.transcribe(audioData: audio)
-        let text = TextPipeline.process(result.text, profile: profile)
+        let polisher = TextPipeline.polisher(profile: profile, openAIKey: try? store.getApiKey())
+        let text = await TextPipeline.process(result.text, profile: profile, polisher: polisher)
 
         if verbose {
             let prompt = TranscriptionPrompt.build(vocab: profile?.vocab ?? [:], order: profile?.vocabOrder ?? [], language: config.language)

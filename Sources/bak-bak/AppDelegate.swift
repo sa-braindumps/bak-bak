@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStartDate: Date = Date()
     private var session = RecordingStateMachine(mode: .hold)
     private var cancelItem: NSMenuItem!
+    private var polishItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -114,6 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        polishItem = NSMenuItem(title: "Polish Text", action: #selector(togglePolish), keyEquivalent: "")
+        polishItem.target = self
+        polishItem.toolTip = "Tidy punctuation and false starts with a small AI model (about 1s extra)"
+        menu.addItem(polishItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let aboutItem = NSMenuItem(title: "About Bak-Bak", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
@@ -137,7 +145,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(title: "Quit Bak-Bak", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
 
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    @objc private func togglePolish() {
+        let enabled = (try? profileStore.read())?.polish ?? false
+        try? profileStore.setPolish(!enabled)
     }
 
     // MARK: - Hotkey
@@ -441,5 +455,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+// MARK: - Menu state
+
+extension AppDelegate: NSMenuDelegate {
+    /// Read settings fresh each time the menu opens, so a change made in the
+    /// Dashboard or by editing profile.toml shows up.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        polishItem.state = (try? profileStore.read())?.polish == true ? .on : .off
     }
 }

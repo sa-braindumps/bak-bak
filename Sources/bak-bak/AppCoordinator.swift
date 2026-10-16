@@ -152,7 +152,9 @@ public final class AppCoordinator: @unchecked Sendable {
 
                 // ── Normal path ───────────────────────────────────────────────
                 // Re-read the profile: a correction may have just added vocab.
-                let correctedText = TextPipeline.process(rawText, profile: try? profileStore.read())
+                let profileNow = try? profileStore.read()
+                let polisher = TextPipeline.polisher(profile: profileNow, openAIKey: try? profileStore.getApiKey())
+                let correctedText = await TextPipeline.process(rawText, profile: profileNow, polisher: polisher)
 
                 let injectionResult = injector.inject(correctedText)
                 let method: String

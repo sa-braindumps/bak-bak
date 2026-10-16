@@ -14,6 +14,7 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 - Snippets. Say "my email" on its own and it types your full email address. Good for addresses, sign-offs, anything you type a lot.
 - Voice commands for a few seconds after each dictation: "scratch that" deletes what was just typed, "new line" and "new paragraph" add line breaks, and "select that" highlights it.
 - Can strip "um", "uh" and similar filler words. Off by default.
+- Optional polish: a small AI model tidies punctuation, capitals and false starts ("so I was, I was thinking" → "So I was thinking") without rewording you. Turn it on from the menu bar (Polish Text) or the Dashboard. It adds about a second and uses your OpenAI key. If you dictate something like "write me a poem", it types those words; it doesn't write the poem.
 - Pick your own shortcut (Control+Option, Command+Option, and so on).
 - Hold the keys to record, or switch to toggle mode: press once to start, again to stop.
 - Copes with your mic changing. If AirPods connect or disconnect mid-sentence, it stops and types what you'd said so far instead of hanging.
@@ -60,6 +61,7 @@ The first time it runs, macOS will ask for **Microphone** and **Accessibility** 
 | Undo, new line, select | Right after a dictation, say "scratch that", "new line", "new paragraph" or "select that" |
 | Add a snippet | `bak-bak snippet add "my email" "you@example.com"` |
 | List or remove snippets | `bak-bak snippet list`, `bak-bak snippet remove "my email"` |
+| Turn on polish | Menu bar → Polish Text, or Dashboard → Settings |
 | Turn on filler removal | Set `remove_fillers = true` under `[cleanup]` in `~/.bak-bak/profile.toml` |
 | Change the shortcut | Dashboard → Settings → Hotkey |
 | See history | `swift run bak-bak history`, or Dashboard → Home |

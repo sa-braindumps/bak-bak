@@ -21,4 +21,24 @@ public enum TextPipeline {
         let substituted = Substitutor.apply(cleaned, vocab: profile?.vocab ?? [:])
         return SnippetExpander.apply(substituted, snippets: profile?.snippets ?? [:])
     }
+
+    /// `process`, with the optional polish pass first when `[cleanup].polish`
+    /// is on. Snippet triggers and short dictations skip it, and if the call
+    /// fails the unpolished text is used. Vocab still runs after polish, so
+    /// taught terms come out right either way.
+    public static func process(_ raw: String, profile: ProfileStore.Profile?, polisher: Polisher?) async -> String {
+        let text = transcript(raw, profile: profile)
+        guard profile?.polish == true, let polisher, Polisher.shouldPolish(text),
+              SnippetExpander.apply(text, snippets: profile?.snippets ?? [:]) == text else {
+            return process(text, profile: profile)
+        }
+        let polished = (try? await polisher.polish(text)) ?? text
+        return process(polished, profile: profile)
+    }
+
+    /// A polisher if polish is on and there's an OpenAI key to use.
+    public static func polisher(profile: ProfileStore.Profile?, openAIKey: String?) -> Polisher? {
+        guard profile?.polish == true, let key = openAIKey, !key.isEmpty else { return nil }
+        return Polisher(apiKey: key)
+    }
 }
