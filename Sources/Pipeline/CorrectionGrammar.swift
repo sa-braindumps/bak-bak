@@ -50,7 +50,7 @@ public struct CorrectionGrammar {
         for pattern in patterns {
             guard let correction = tryPattern(pattern, on: trimmed) else { continue }
             guard looksLikeWordFix(correction) else { return nil }
-            if let lastText, !containsWords(lastText, correction.heard) { return nil }
+            if let lastText, !PhraseMatch.contains(lastText, phrase: correction.heard) { return nil }
             return correction
         }
 
@@ -63,11 +63,6 @@ public struct CorrectionGrammar {
         guard heardWords.count <= maxWords, intendedWords.count <= maxWords else { return false }
         if heardWords.count == 1, pronouns.contains(correction.heard.lowercased()) { return false }
         return correction.heard.lowercased() != correction.intended.lowercased()
-    }
-
-    private static func containsWords(_ text: String, _ phrase: String) -> Bool {
-        let pattern = "(?i)(?<![\\w])" + NSRegularExpression.escapedPattern(for: phrase) + "(?![\\w])"
-        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// Trim whitespace, trailing sentence punctuation and wrapping quotes, so

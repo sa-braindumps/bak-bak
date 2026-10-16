@@ -34,15 +34,14 @@ public struct SnippetExpander {
         return text
     }
 
-    /// Normalize for whole-utterance comparison: trim whitespace, lowercase,
-    /// and drop a single run of trailing sentence punctuation ("." / "!" / "?"
-    /// and friends) so "send my address." matches the trigger "send my address".
+    /// Normalize for whole-utterance comparison: drop a single run of
+    /// trailing sentence punctuation ("." / "!" / "?" and friends), then
+    /// compare case-insensitively ignoring spaces and hyphens, so "My
+    /// sign-off." matches the trigger "my sign off".
     private static func normalize(_ s: String) -> String {
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         let trailingPunctuation = CharacterSet(charactersIn: ".!?,;:")
         let stripped = trimmed.unicodeScalars.reversed().drop(while: { trailingPunctuation.contains($0) })
-        return String(String.UnicodeScalarView(stripped.reversed()))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        return PhraseMatch.key(String(String.UnicodeScalarView(stripped.reversed())))
     }
 }

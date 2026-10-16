@@ -30,16 +30,10 @@ public struct Substitutor {
     }
 
     /// Replace occurrences of `pattern` in `text` with `replacement`.
-    /// Case-insensitive, whole-token matching.
+    /// Case-insensitive, whole-word, and loose about how the words of a
+    /// multi-word key are joined (see `PhraseMatch`).
     private static func replaceOccurrences(of pattern: String, in text: String, with replacement: String) -> String {
-        let patternLower = pattern.lowercased()
-        _ = text.lowercased() // used only for regex matching
-
-        // Build a regex that matches the pattern on token boundaries
-        let escaped = NSRegularExpression.escapedPattern(for: patternLower)
-        let regexPattern = "(?i)(?<![\\p{L}])\(escaped)(?![\\p{L}])"
-
-        guard let regex = try? NSRegularExpression(pattern: regexPattern) else {
+        guard let regex = PhraseMatch.regex(for: pattern) else {
             return text
         }
 

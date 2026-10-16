@@ -128,6 +128,7 @@ Each feature lists **Behavior**, **Edge cases**, and **Failure modes**. The diff
 **Matching rules.**
 - Case-insensitive on the "heard" key; the "intended" value is inserted verbatim (preserves `kubectl` lowercase, `Nginx` capitalization).
 - Matches respect token/word boundaries so `"nicks"` does not corrupt `"picnicks"`. Multi-word keys (`"cube cuttle"`) match across the space.
+- Between the words of a key, a space, a hyphen or nothing are treated alike, because the model writes the same words differently from one dictation to the next: `"bug bug"` matches `bug bug`, `Bug-Bug` and `BugBug`. The same rule (`Sources/Pipeline/PhraseMatch.swift`) is used for snippet triggers and for checking that a correction's `X` was in the last dictation. Different *spellings* ("buck buck", "BugBuck") still need their own entries.
 - Substitutions are applied longest-key-first so a longer phrase wins over a shorter overlapping one.
 - The map is read fresh from `profile.toml` per transcription, so `bak-bak vocab add` and hand edits take effect on the very next dictation with no restart.
 
