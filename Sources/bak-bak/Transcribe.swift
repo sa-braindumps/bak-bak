@@ -45,8 +45,8 @@ struct Transcribe: ParsableCommand {
         let text = TextPipeline.process(result.text, profile: profile)
 
         if verbose {
-            let prompt = TranscriptionPrompt.build(vocab: profile?.vocab ?? [:], order: profile?.vocabOrder ?? [])
-            print("service: \(config.host)  model: \(config.model)  latency: \(result.latencyMs) ms")
+            let prompt = TranscriptionPrompt.build(vocab: profile?.vocab ?? [:], order: profile?.vocabOrder ?? [], language: config.language)
+            print("service: \(config.host)  model: \(config.model)  language: \(config.language.rawValue)  latency: \(result.latencyMs) ms")
             print("prompt:  \(prompt)")
             print("raw:     \(result.text)")
             print("final:   \(text)")

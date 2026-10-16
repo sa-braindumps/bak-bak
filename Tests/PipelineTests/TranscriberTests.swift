@@ -192,4 +192,48 @@ final class TranscriberTests: XCTestCase {
         profile.transcription = config
         return profile
     }
+
+    // MARK: - Language
+
+    func testLanguageField() async throws {
+        func body(_ language: TranscriptionConfig.Language) async throws -> String {
+            _ = try await transcribe(TranscriptionConfig(language: language))
+            return String(decoding: StubURLProtocol.lastBody, as: UTF8.self)
+        }
+        let english = try await body(.english)
+        XCTAssertTrue(english.contains("name=\"language\"\r\n\r\nen\r\n"))
+        let hindi = try await body(.hindi)
+        XCTAssertTrue(hindi.contains("name=\"language\"\r\n\r\nhi\r\n"))
+        let hinglish = try await body(.hinglish)
+        XCTAssertFalse(hinglish.contains("name=\"language\""), "Hinglish lets the model detect the language")
+        let auto = try await body(.auto)
+        XCTAssertFalse(auto.contains("name=\"language\""))
+    }
+
+    func testLanguageIsSavedAndUnknownValuesFallBackToEnglish() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).toml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = ProfileStore(fileURL: url)
+        try store.setTranscription(TranscriptionConfig(language: .hinglish))
+        XCTAssertEqual(try store.read().transcription.language, .hinglish)
+
+        try "[transcription]\nlanguage = \"klingon\"\n".write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try store.read().transcription.language, .english)
+    }
+
+    func testHinglishPipelineRomanizesBeforeVocab() {
+        var profile = ProfileStore.Profile()
+        profile.transcription.language = .hinglish
+        profile.vocab = ["vala": "wala"]
+        XCTAssertEqual(TextPipeline.process("कल मीटिंग वाला इश्यू", profile: profile), "kal meeting wala issue")
+
+        profile.transcription.language = .hindi
+        XCTAssertEqual(TextPipeline.process("कल मीटिंग", profile: profile), "कल मीटिंग", "Hindi mode keeps Devanagari")
+    }
+
+    func testHinglishPromptUsesExampleSpeech() {
+        XCTAssertEqual(TranscriptionPrompt.build(vocab: [:], language: .hinglish), TranscriptionPrompt.hinglishBase)
+        XCTAssertTrue(TranscriptionPrompt.build(vocab: ["x": "Zentrafy"], language: .hinglish).hasSuffix("Vocabulary: Zentrafy."))
+        XCTAssertEqual(TranscriptionPrompt.build(vocab: [:], language: .hindi), "Voice dictation.")
+    }
 }

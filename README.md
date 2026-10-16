@@ -27,6 +27,7 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 - Can launch at login.
 - On first run it asks for Accessibility access and opens settings if there's no API key yet.
 - You bring your own key. No subscription and no word limit. With the default OpenAI model it costs about $0.003 a minute.
+- Speaks Hindi and Hinglish. Set the language in Dashboard → Settings → Transcription. Hindi comes out in देवनागरी; Hinglish comes out the way people text, in Roman letters ("kal meeting hai, deck bhej dena aur deployment vala issue fix kar dena"). If it spells a word oddly, teach it the usual way and that sticks.
 - Works with other speech-to-text services that speak the OpenAI API. Groq is built in as a preset and is much faster; you can also point it at any compatible URL. Pick one in Dashboard → Settings → Transcription. Your OpenAI key is only ever sent to OpenAI.
 - Tells you what actually went wrong (wrong key, model doesn't exist, offline, out of credit) instead of a generic error, and checks the key before you start talking.
 

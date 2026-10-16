@@ -86,8 +86,11 @@ public final class Transcriber: TranscriptionEngine, @unchecked Sendable {
         }
 
         field("model", config.model)
-        // Language hint — prevents misdetection cascades that cause hallucinations
-        field("language", "en")
+        // Language hint — prevents misdetection cascades that cause
+        // hallucinations. Left out for Hinglish/auto so the model can detect.
+        if let code = config.language.apiCode {
+            field("language", code)
+        }
         // Prompt — steers the model toward dictation-style output and the
         // user's vocabulary
         field("prompt", prompt)

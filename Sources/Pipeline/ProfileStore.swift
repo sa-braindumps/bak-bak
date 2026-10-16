@@ -159,7 +159,8 @@ public final class ProfileStore: @unchecked Sendable {
             profile.transcription = TranscriptionConfig(
                 baseURL: transcription["base_url"]?.string ?? TranscriptionConfig.openAIBaseURL,
                 model: transcription["model"]?.string ?? TranscriptionConfig.defaultModel,
-                apiKey: transcription["api_key"]?.string
+                apiKey: transcription["api_key"]?.string,
+                language: transcription["language"]?.string.flatMap(TranscriptionConfig.Language.init(rawValue:)) ?? .english
             )
         }
 
@@ -260,6 +261,7 @@ public final class ProfileStore: @unchecked Sendable {
         try edit { editor in
             editor.set("base_url", to: TOMLLineEditor.string(config.baseURL), in: "transcription")
             editor.set("model", to: TOMLLineEditor.string(config.model), in: "transcription")
+            editor.set("language", to: TOMLLineEditor.string(config.language.rawValue), in: "transcription")
             if let key = config.apiKey, !key.isEmpty {
                 editor.set("api_key", to: TOMLLineEditor.string(key), in: "transcription")
             } else {

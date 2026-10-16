@@ -12,12 +12,13 @@ struct TranscriptionSettingsView: View {
     @State private var baseURL = ""
     @State private var model = ""
     @State private var serviceKey = ""
+    @State private var language: TranscriptionConfig.Language = .english
     @State private var saved = false
 
     private static let customID = "custom"
 
     private var draft: TranscriptionConfig {
-        TranscriptionConfig(baseURL: baseURL, model: model, apiKey: serviceKey.isEmpty ? nil : serviceKey)
+        TranscriptionConfig(baseURL: baseURL, model: model, apiKey: serviceKey.isEmpty ? nil : serviceKey, language: language)
     }
 
     var body: some View {
@@ -55,6 +56,19 @@ struct TranscriptionSettingsView: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
+                Picker("Language", selection: $language) {
+                    ForEach(TranscriptionConfig.Language.allCases, id: \.self) { language in
+                        Text(language.label).tag(language)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if language == .hinglish {
+                    Text("Hindi and English mixed, typed in Roman letters: \"kal meeting hai, deck bhej dena\".")
+                        .font(.appCaption)
+                        .foregroundColor(AppColors.textMuted)
+                }
+
                 if draft.endpoint == nil {
                     Text("That URL doesn't look right. It should start with https://")
                         .font(.appCaption)
@@ -86,6 +100,7 @@ struct TranscriptionSettingsView: View {
         baseURL = config.baseURL
         model = config.model
         serviceKey = config.apiKey ?? ""
+        language = config.language
         selection = config.preset?.id ?? Self.customID
     }
 

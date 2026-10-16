@@ -120,7 +120,7 @@ public final class AppCoordinator: @unchecked Sendable {
         Task {
             do {
                 let result = try await transcriber.transcribe(audioData: audioData)
-                let rawText = result.text
+                let rawText = TextPipeline.transcript(result.text, profile: profileBefore)
 
                 // ── Interception seam (SPEC §7) ───────────────────────────────
                 // If the correction/command window is open, the next utterance

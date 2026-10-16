@@ -331,6 +331,9 @@ The cleanup stage runs on the raw transcript **before** `[vocab]` substitution, 
 | `base_url` | string | `"https://api.openai.com/v1"` | Any OpenAI-compatible API root; `/audio/transcriptions` is appended. Must be http(s). |
 | `model` | string | `"gpt-4o-mini-transcribe"` | Sent as-is. Groq: `whisper-large-v3-turbo`. |
 | `api_key` | string | *(absent)* | Required for any host other than `api.openai.com`. Removed when switching back to OpenAI in the Dashboard. |
+| `language` | string | `"en"` | `en`, `hi`, `hinglish` or `auto`. `en`/`hi` are sent as the API's `language` field; `hinglish`/`auto` leave it out so the model detects. Unknown values fall back to `en`. |
+
+**Hinglish.** The transcription models always write Hindi speech in Devanagari; telling them to use Roman letters does nothing (tested). So Hinglish mode (1) sends an example of Roman Hinglish speech as the prompt, which measurably helps them hear English words inside Hindi ("deck" instead of "देख"), and (2) converts the Devanagari to everyday Roman spelling with `HinglishRomanizer`: silent-"a" deletion, the system's ICU transliteration, a small spelling map and a short list of common English loanwords. The conversion runs before commands, corrections, fillers and `[vocab]`, so all of those work the same in Hinglish, and anything it spells oddly ("vala", "han") is fixed by teaching `[vocab]`. It aims for readable everyday Hinglish, not perfect transliteration.
 
 The whole table is optional; a missing table means the OpenAI default. The Dashboard → Settings → Transcription card offers presets (OpenAI mini, OpenAI full, Groq) and a Custom option.
 

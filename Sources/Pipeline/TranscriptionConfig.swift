@@ -8,16 +8,46 @@ public struct TranscriptionConfig: Codable, Equatable, Sendable {
     public static let openAIBaseURL = "https://api.openai.com/v1"
     public static let defaultModel = "gpt-4o-mini-transcribe"
 
+    /// What the user speaks, and how it should be written.
+    public enum Language: String, Codable, CaseIterable, Sendable {
+        case english = "en"
+        case hindi = "hi"
+        /// Hindi + English mixed, written in Roman letters.
+        case hinglish
+        case auto
+
+        public var label: String {
+            switch self {
+            case .english: return "English"
+            case .hindi: return "Hindi (देवनागरी)"
+            case .hinglish: return "Hinglish (Roman letters)"
+            case .auto: return "Detect automatically"
+            }
+        }
+
+        /// The API's `language` field. Nil lets the model detect it, which
+        /// handles Hindi and English mixed in one sentence best.
+        public var apiCode: String? {
+            switch self {
+            case .english: return "en"
+            case .hindi: return "hi"
+            case .hinglish, .auto: return nil
+            }
+        }
+    }
+
     public var baseURL: String
     public var model: String
     /// A key just for this service. Nil means "use the OpenAI key", which is
     /// only allowed when the service *is* OpenAI.
     public var apiKey: String?
+    public var language: Language
 
-    public init(baseURL: String = openAIBaseURL, model: String = defaultModel, apiKey: String? = nil) {
+    public init(baseURL: String = openAIBaseURL, model: String = defaultModel, apiKey: String? = nil, language: Language = .english) {
         self.baseURL = baseURL
         self.model = model
         self.apiKey = apiKey
+        self.language = language
     }
 
     public static let `default` = TranscriptionConfig()
@@ -97,7 +127,7 @@ extension Transcriber {
         guard let key = config.resolvedKey(openAIKey: openAIKey) else {
             throw TranscriptionSetupError.missingKey(host: config.host, isOpenAI: config.isOpenAI)
         }
-        let prompt = TranscriptionPrompt.build(vocab: profile?.vocab ?? [:], order: profile?.vocabOrder ?? [])
+        let prompt = TranscriptionPrompt.build(vocab: profile?.vocab ?? [:], order: profile?.vocabOrder ?? [], language: config.language)
         return Transcriber(apiKey: key, prompt: prompt, config: config, session: session)
     }
 }
