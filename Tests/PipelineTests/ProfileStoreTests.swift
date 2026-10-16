@@ -302,4 +302,33 @@ final class ProfileStoreTests: XCTestCase {
         try store.addSnippet(trigger: "sign off", expansion: "Best,\n\"Shivam\" \\ team")
         XCTAssertEqual(try store.read().snippets["sign off"], "Best,\n\"Shivam\" \\ team")
     }
+
+    // MARK: - First run
+
+    func testDefaultTemplateParsesToDefaults() throws {
+        let store = ProfileStore(fileURL: profileURL)
+        XCTAssertTrue(try store.createDefaultIfMissing())
+        let profile = try store.read()
+        XCTAssertEqual(profile.hotkeyModifiers, "control+option")
+        XCTAssertEqual(profile.recordingMode, "hold")
+        XCTAssertEqual(profile.correctionWindowSecs, 10)
+        XCTAssertFalse(profile.removeFillers)
+        XCTAssertTrue(profile.vocab.isEmpty)
+        XCTAssertTrue(profile.snippets.isEmpty)
+    }
+
+    func testCreateDefaultNeverOverwrites() throws {
+        // Regression: re-running `bak-bak setup` used to wipe the profile.
+        let store = ProfileStore(fileURL: profileURL)
+        try store.addVocabEntry(heard: "nicks", intended: "Nginx")
+        try store.addSnippet(trigger: "my email", expansion: "a@x.com")
+
+        XCTAssertFalse(try store.createDefaultIfMissing())
+        try store.setApiKey("sk-new")
+
+        let profile = try store.read()
+        XCTAssertEqual(profile.vocab["nicks"], "Nginx")
+        XCTAssertEqual(profile.snippets["my email"], "a@x.com")
+        XCTAssertEqual(try store.getApiKey(), "sk-new")
+    }
 }

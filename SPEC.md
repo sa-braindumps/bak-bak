@@ -141,11 +141,13 @@ See [§7 Voice correction specification](#7-voice-correction-specification) for 
 
 ### 3.5 Text injection at cursor
 
-**Behavior.** Corrected text is inserted at the focused element using `AXUIElement` (`ApplicationServices`). When Accessibility permission is **denied**, Bak-Bak falls back to placing the text on the clipboard via `NSPasteboard` and the menu bar explicitly reports **"copied to clipboard"** (so the user is never left wondering why nothing appeared at the cursor).
+**Behavior.** Corrected text is pasted at the cursor: Bak-Bak snapshots the clipboard (every item, every type), puts the text on it marked `org.nspasteboard.TransientType` so clipboard managers skip it, posts ⌘V via `CGEvent`, and restores the snapshot 0.5 s later. The restore is skipped if the clipboard changed in the meantime (the user copied something new). Logic lives in `Sources/Pipeline/ClipboardSnapshot.swift`.
+
+When Accessibility permission is **denied**, synthesized keystrokes are impossible, so the text is left on the clipboard (not restored) and the overlay says **"Copied to clipboard. Press ⌘V to paste."** The user is never left wondering why nothing appeared at the cursor, and the dictation is never lost.
 
 **Edge cases.**
-- **No focused text element** (e.g. focus on a non-text control) → clipboard fallback with the same explicit menu-bar message.
-- **Secure input field** (password fields with secure event input) → clipboard fallback; secure fields refuse synthesized input by OS design.
+- **No focused text element** (e.g. focus on a non-text control) → clipboard fallback with the same explicit message. *Not yet implemented: today the ⌘V is sent regardless.*
+- **Secure input field** (password fields with secure event input) → clipboard fallback; secure fields refuse synthesized input by OS design. *Not yet implemented.*
 
 **Failure modes.**
 - **AX insertion partially succeeds** in a quirky app → this is exactly why the *correction* path uses backspace+retype rather than AXValue (see [§7.4](#74-in-place-rewrite-mechanics)).
@@ -306,7 +308,7 @@ The cleanup stage runs on the raw transcript **before** `[vocab]` substitution, 
 
 ### 5.5 Defaults and constraints summary
 
-- A **missing file** is equivalent to: empty `[vocab]`, empty `[snippets]`, no `[style].seed`, `[hotkey].trigger = "option"`, `[correction].correction_window_secs = 10`, `[cleanup].remove_fillers = false`. The app creates the file on first `setup`.
+- A **missing file** is equivalent to: empty `[vocab]`, empty `[snippets]`, no `[style].seed`, `[hotkey].modifiers = "control+option"`, `[hotkey].recording_mode = "hold"`, `[correction].correction_window_secs = 10`, `[cleanup].remove_fillers = false`. `setup` creates the file from `ProfileStore.defaultTemplate` on first run only; re-running `setup` never overwrites an existing profile, it only updates `api_key`.
 - A **malformed file** does not block dictation (raw transcript is injected) and surfaces in the error state and `bak-bak doctor`.
 - **Comments are load-bearing**: the `# learned <timestamp>` comments are how `doctor` reconstructs correction history. There is no separate `corrections.log` — history lives in these comments. This is why the TOML writer **must** preserve comments.
 

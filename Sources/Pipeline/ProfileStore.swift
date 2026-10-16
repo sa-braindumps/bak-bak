@@ -52,6 +52,57 @@ public final class ProfileStore: @unchecked Sendable {
         }
     }
 
+    // MARK: - First run
+
+    /// The commented starter file `setup` writes on first run.
+    public static let defaultTemplate = #"""
+    # ~/.bak-bak/profile.toml
+    # This file is yours. Edit it, diff it, put it in git. There is no hidden state.
+
+    [vocab]
+    # Teach Bak-Bak a term once and it is corrected forever.
+    # Format:  "what whisper heard" = "what you meant"
+    # Example (uncomment or copy your own):
+    # "cube cuttle" = "kubectl"
+    # "nicks"       = "Nginx"
+
+    [snippets]
+    # Speak a whole trigger phrase, get the expansion. Whole-utterance only.
+    # Format:  "trigger phrase" = "expansion text"
+    # "my email" = "you@example.com"
+
+    [cleanup]
+    # Strip um, uh, erm and similar filler words. Off by default.
+    remove_fillers = false
+
+    [hotkey]
+    # control, option, command, shift, fn joined with "+"
+    modifiers = "control+option"
+    # "hold" (hold to talk) or "toggle" (press to start, press again to stop)
+    recording_mode = "hold"
+
+    [correction]
+    # Seconds after a dictation during which "no, X is Y" and voice commands work. 0 turns it off.
+    correction_window_secs = 10
+
+    [general]
+    sound_enabled = true
+
+    """#
+
+    /// Write `defaultTemplate` if there's no profile yet. Never touches an
+    /// existing file. Returns whether it created one.
+    @discardableResult
+    public func createDefaultIfMissing() throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !fileManager.fileExists(atPath: fileURL.path) else { return false }
+        try ensureDirectoryExists()
+        try Self.defaultTemplate.write(to: fileURL, atomically: true, encoding: .utf8)
+        return true
+    }
+
     // MARK: - Read
 
     public func read() throws -> Profile {

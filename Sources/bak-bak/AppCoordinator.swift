@@ -148,6 +148,7 @@ public final class AppCoordinator: @unchecked Sendable {
                 let method: String
                 switch injectionResult {
                 case .inserted: method = "inserted"
+                case .copiedToClipboard: method = "clipboard"
                 case .failure(let r): method = "failed:\(r)"
                 }
 
@@ -159,6 +160,8 @@ public final class AppCoordinator: @unchecked Sendable {
                     // "scratch that" would backspace text we never typed.
                     correctionController?.openWindow(afterInjecting: correctedText)
                     completion(.success(correctedText))
+                case .copiedToClipboard:
+                    completion(.success("Copied to clipboard. Press ⌘V to paste."))
                 case .failure(let reason):
                     completion(.failure(NSError(domain: "bak-bak", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])))
                 }

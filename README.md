@@ -7,6 +7,8 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 ## What it does
 
 - Types into pretty much anything: browsers, Electron apps, regular Mac text fields.
+- Leaves your clipboard alone. It borrows the clipboard to paste, then puts back whatever you had, images and formatted text included. Clipboard managers are told to skip the dictation.
+- If it isn't allowed to type (no Accessibility permission yet), it puts the text on the clipboard and tells you to press ⌘V, so nothing you say gets lost.
 - Learns your words. Say "no, X is Y" right after a dictation and it fixes the text it just typed, then applies that fix every time after. X has to be something it actually just typed, so a normal sentence like "actually the meeting is at 3pm" still gets typed as-is.
 - Snippets. Say "my email" on its own and it types your full email address. Good for addresses, sign-offs, anything you type a lot.
 - Voice commands for a few seconds after each dictation: "scratch that" deletes what was just typed, "new line" and "new paragraph" add line breaks, and "select that" highlights it.
@@ -80,7 +82,7 @@ Everything lives in `~/.bak-bak/`:
 | `profile.toml` | TOML | API key, vocabulary, snippets, settings |
 | `history.jsonl` | JSON Lines | Every dictation with its time, latency and model |
 
-You can edit `profile.toml` by hand. Changes apply on the next dictation, and comments you add are kept when the app writes to the file.
+You can edit `profile.toml` by hand. Changes apply on the next dictation, and comments you add are kept when the app writes to the file. Running `bak-bak setup` again only updates your API key; it won't touch your words, snippets or settings.
 
 ## License
 

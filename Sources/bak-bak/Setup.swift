@@ -69,37 +69,13 @@ struct Setup: ParsableCommand {
             }
         }
 
-        // Write profile
-        try profileStore.setApiKey(key)
-
-        // Also write a default profile.toml with commented examples
-        let defaultProfile = """
-        # ~/.bak-bak/profile.toml
-        # This file is yours. Edit it, diff it, put it in git. There is no hidden state.
-
-        [vocab]
-        # Teach Bak-Bak a term once and it is corrected forever.
-        # Format:  "what whisper heard" = "what you meant"
-        # Example (uncomment or copy your own):
-        # "cube cuttle" = "kubectl"
-        # "nicks"       = "Nginx"
-
-        [hotkey]
-        trigger = "option"
-
-        [correction]
-        correction_window_secs = 10
-        """
-
-        let dir = profileStore.fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? defaultProfile.write(to: profileStore.fileURL, atomically: true, encoding: .utf8)
-
-        // Re-write the API key since the default profile might have overwritten it
+        // Create the starter profile on first run only. Re-running setup must
+        // never wipe the user's vocab, snippets or settings.
+        try profileStore.createDefaultIfMissing()
         try profileStore.setApiKey(key)
 
         print()
-        print("Setup complete. Hold ⌥ anywhere and start talking.")
+        print("Setup complete. Hold ⌃⌥ (Control+Option) anywhere and start talking.")
         print("Note: first launch may say \"can't be opened\" — right-click the app → Open.")
     }
 

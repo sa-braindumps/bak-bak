@@ -6,10 +6,17 @@ import Foundation
 /// Requires Accessibility permission for CGEvent posting.
 public final class Injector: @unchecked Sendable {
 
-    public enum InjectionResult: Sendable {
+    public enum InjectionResult: Sendable, Equatable {
         case inserted
+        /// Couldn't type (no Accessibility permission), so the text was left
+        /// on the clipboard for the user to paste.
+        case copiedToClipboard
         case failure(String)
     }
+
+    /// How long to wait before putting the user's clipboard back. Slow apps
+    /// (Electron, remote desktops) read the pasteboard well after Cmd+V.
+    private static let restoreDelay: TimeInterval = 0.5
 
     public init() {}
 
@@ -17,7 +24,10 @@ public final class Injector: @unchecked Sendable {
     /// Uses clipboard + Cmd+V which works in all apps (browsers, Electron, native).
     public func inject(_ text: String) -> InjectionResult {
         guard isAccessibilityGranted() else {
-            return .failure("accessibility denied")
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            return .copiedToClipboard
         }
         return insertViaClipboard(text)
     }
@@ -25,13 +35,8 @@ public final class Injector: @unchecked Sendable {
     /// Place text on the clipboard, simulate Cmd+V, then restore the previous clipboard.
     private func insertViaClipboard(_ text: String) -> InjectionResult {
         let pasteboard = NSPasteboard.general
-        let previousContents = pasteboard.pasteboardItems?.compactMap { item -> (NSPasteboard.PasteboardType, Data)? in
-            guard let type = item.types.first, let data = item.data(forType: type) else { return nil }
-            return (type, data)
-        }
-
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        let snapshot = ClipboardSnapshot(of: pasteboard)
+        let ourChangeCount = ClipboardSnapshot.placeTransient(text, on: pasteboard)
 
         usleep(50_000)
 
@@ -49,14 +54,10 @@ public final class Injector: @unchecked Sendable {
         usleep(10_000)
         keyUp.post(tap: .cgAnnotatedSessionEventTap)
 
-        // Restore previous clipboard after paste completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            if let items = previousContents, !items.isEmpty {
-                pasteboard.clearContents()
-                for (type, data) in items {
-                    pasteboard.setData(data, forType: type)
-                }
-            }
+        // Put the user's clipboard back once the paste has had time to land.
+        // Skipped if they copied something new in the meantime.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay) {
+            snapshot.restore(to: pasteboard, ifUnchangedSince: ourChangeCount)
         }
 
         return .inserted
