@@ -34,6 +34,11 @@ public struct RecordingStateMachine: Equatable {
         case cancel
         /// The recorder hit its maximum duration.
         case limitReached
+        /// The mic changed under us (AirPods connected, …); the engine stopped.
+        case inputChanged
+        /// A non-modifier key was pressed while the hotkey was held, so the
+        /// hotkey was part of a shortcut (⌘⇧4), not a dictation.
+        case otherKeyPressed
         /// Transcription and injection are done (success or failure).
         case finished
     }
@@ -44,6 +49,8 @@ public struct RecordingStateMachine: Equatable {
         case tooShort
         /// Toggle mode hit the cap; likely a forgotten recording.
         case limitReached
+        /// The hotkey turned out to be part of a keyboard shortcut.
+        case shortcut
     }
 
     public enum Action: Equatable {
@@ -95,6 +102,15 @@ public struct RecordingStateMachine: Equatable {
             }
             phase = .idle
             return .discard(.limitReached)
+
+        case (.recording, .inputChanged):
+            // Keep what was said before the switch.
+            phase = .transcribing
+            return .stopAndTranscribe
+
+        case (.recording, .otherKeyPressed):
+            phase = .idle
+            return .discard(.shortcut)
 
         case (.transcribing, .finished):
             phase = .idle

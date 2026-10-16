@@ -37,6 +37,8 @@ public final class AppCoordinator: @unchecked Sendable {
     var onAutoStop: (() -> Void)?
     /// Called once when recording approaches the 60s limit (~50s).
     var onNearLimit: (() -> Void)?
+    /// Called when the mic changes mid-recording (AirPods connect, …).
+    var onInputChanged: (() -> Void)?
 
     public init() {
         let controller = CorrectionController(profileStore: profileStore, injector: injector)
@@ -50,6 +52,9 @@ public final class AppCoordinator: @unchecked Sendable {
         }
         audioRecorder.onNearLimit = { [weak self] in
             self?.onNearLimit?()
+        }
+        audioRecorder.onInputChanged = { [weak self] in
+            self?.onInputChanged?()
         }
         try audioRecorder.startRecording()
     }

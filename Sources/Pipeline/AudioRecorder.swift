@@ -41,6 +41,12 @@ public final class AudioRecorder: @unchecked Sendable {
     /// Spectrum callback — fires on the audio thread with `bandCount` normalised
     /// frequency-band magnitudes (0...1), low frequency first. Drives the equalizer overlay.
     public var onSpectrum: (([Float]) -> Void)?
+    /// Called on the main queue when the input device changes mid-recording
+    /// (AirPods connect/disconnect, mic unplugged). The engine has stopped by
+    /// then, so the caller should stop and use what was captured.
+    public var onInputChanged: (() -> Void)?
+
+    private var configChangeObserver: NSObjectProtocol?
 
     /// Target sample rate for Whisper (16kHz mono)
     private let targetSampleRate: Double = 16000
@@ -126,7 +132,10 @@ public final class AudioRecorder: @unchecked Sendable {
                 self?.appendBuffer(buffer)
             }
         } else {
-            let formatConverter = AVAudioConverter(from: hardwareFormat, to: recordingFormat)!
+            // No usable input device gives a format the converter can't take.
+            guard let formatConverter = AVAudioConverter(from: hardwareFormat, to: recordingFormat) else {
+                throw RecorderError.audioEngineError("no usable microphone")
+            }
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) { [weak self] buffer, _ in
                 let frameCount = AVAudioFrameCount(
                     Double(buffer.frameLength) * (recordingFormat.sampleRate / buffer.format.sampleRate)
@@ -151,6 +160,14 @@ public final class AudioRecorder: @unchecked Sendable {
             try engine.start()
             audioEngine = engine
             isRecording = true
+            let started = Date()
+            configChangeObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+            ) { [weak self] _ in
+                // Bluetooth devices can fire one right as the engine starts.
+                guard Date().timeIntervalSince(started) > 0.3 else { return }
+                self?.onInputChanged?()
+            }
         } catch {
             throw RecorderError.audioEngineError(error.localizedDescription)
         }
@@ -163,6 +180,10 @@ public final class AudioRecorder: @unchecked Sendable {
 
         guard isRecording else { return Data() }
 
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configChangeObserver = nil
+        }
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil

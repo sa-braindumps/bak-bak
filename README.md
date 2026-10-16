@@ -16,6 +16,8 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 - Can strip "um", "uh" and similar filler words. Off by default.
 - Pick your own shortcut (Control+Option, Command+Option, and so on).
 - Hold the keys to record, or switch to toggle mode: press once to start, again to stop.
+- Copes with your mic changing. If AirPods connect or disconnect mid-sentence, it stops and types what you'd said so far instead of hanging.
+- Stays out of your keyboard shortcuts. If you hold the hotkey and press another key (say ⌘⇧4 with ⌘⇧ as the hotkey), that's treated as a shortcut, not a dictation.
 - Press Esc to cancel a recording. Nothing gets sent to OpenAI and nothing is typed. The Esc doesn't leak through to the app you're in, so it won't close a dialog or stop a terminal command. You can also cancel from the menu bar.
 - Keeps a history of every dictation in `~/.bak-bak/history.jsonl`.
 - A dashboard window with your history, usage stats, dictionary and settings.

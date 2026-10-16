@@ -63,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.onNearLimit = { [weak self] in
             self?.overlay.showNearLimit()
         }
+        coordinator.onInputChanged = { [weak self] in
+            self?.handle(.inputChanged)
+        }
     }
 
     // MARK: - Status Item
@@ -149,6 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor.onEscape = { [weak self] in
             self?.handle(.cancel)
         }
+        hotkeyMonitor.onOtherKeyWhileHeld = { [weak self] in
+            self?.handle(.otherKeyPressed)
+        }
 
         hotkeyMonitor.start()
     }
@@ -219,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch reason {
         case .cancelled:
             overlay.showDiscarded("Cancelled")
-        case .tooShort:
+        case .tooShort, .shortcut:
             overlay.hide()
         case .limitReached:
             overlay.showDiscarded("Stopped at 60s")

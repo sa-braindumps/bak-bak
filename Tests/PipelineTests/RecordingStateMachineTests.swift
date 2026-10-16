@@ -100,4 +100,30 @@ final class RecordingStateMachineTests: XCTestCase {
         XCTAssertEqual(RecordingStateMachine.Mode(configValue: "hold"), .hold)
         XCTAssertEqual(RecordingStateMachine.Mode(configValue: "nonsense"), .hold)
     }
+
+    // MARK: - Mic change and shortcuts
+
+    func testMicChangeKeepsWhatWasSaid() {
+        for mode in [RecordingStateMachine.Mode.hold, .toggle] {
+            var machine = RecordingStateMachine(mode: mode)
+            _ = machine.handle(.hotkeyDown)
+            XCTAssertEqual(machine.handle(.inputChanged), .stopAndTranscribe, "\(mode)")
+            XCTAssertEqual(machine.phase, .transcribing)
+        }
+    }
+
+    func testShortcutWithTheHotkeyIsNotADictation() {
+        // Regression: with ⌘⇧ as the hotkey, ⌘⇧4 started a recording.
+        var machine = RecordingStateMachine(mode: .hold)
+        _ = machine.handle(.hotkeyDown)
+        XCTAssertEqual(machine.handle(.otherKeyPressed), .discard(.shortcut))
+        XCTAssertEqual(machine.handle(.hotkeyUp(heldFor: 1)), .none)
+        XCTAssertEqual(machine.phase, .idle)
+    }
+
+    func testMicChangeWhenIdleIsIgnored() {
+        var machine = RecordingStateMachine(mode: .hold)
+        XCTAssertEqual(machine.handle(.inputChanged), .none)
+        XCTAssertEqual(machine.handle(.otherKeyPressed), .none)
+    }
 }

@@ -8,6 +8,9 @@ public final class HotkeyMonitor {
     public var onHotkeyDown: (() -> Void)?
     public var onHotkeyUp: ((TimeInterval) -> Void)?
     public var onEscape: (() -> Void)?
+    /// A regular key was pressed while the hotkey was held: the hotkey was
+    /// part of a shortcut like ⌘⇧4, not a dictation.
+    public var onOtherKeyWhileHeld: (() -> Void)?
     public var modifierKeys: NSEvent.ModifierFlags = [.control, .option]
 
     /// While true, Esc is caught (and kept from the frontmost app) and reported
@@ -22,6 +25,8 @@ public final class HotkeyMonitor {
     private var isKeyHeld = false
     private var keyDownTime: Date?
     private static let escapeKeyCode: Int64 = 53
+    /// The modifiers a hotkey can be made of; others (caps lock, …) are ignored.
+    private static let hotkeyModifierMask: NSEvent.ModifierFlags = [.control, .option, .command, .shift, .function]
 
     public init() {}
 
@@ -87,7 +92,8 @@ public final class HotkeyMonitor {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let pressed = event.modifierFlags.contains(modifierKeys)
+        // Exactly the hotkey's modifiers: ⌃⌥ shouldn't fire while ⌃⌥⌘ is held.
+        let pressed = event.modifierFlags.intersection(Self.hotkeyModifierMask) == modifierKeys
 
         if pressed && !isKeyHeld {
             isKeyHeld = true
@@ -122,8 +128,12 @@ public final class HotkeyMonitor {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             escapeFallbackMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, self.isCapturingEscape, Int64(event.keyCode) == Self.escapeKeyCode else { return }
-                self.onEscape?()
+                guard let self else { return }
+                if Int64(event.keyCode) == Self.escapeKeyCode {
+                    if self.isCapturingEscape { self.onEscape?() }
+                } else if self.isKeyHeld {
+                    self.onOtherKeyWhileHeld?()
+                }
             }
             return
         }
@@ -142,6 +152,9 @@ public final class HotkeyMonitor {
         }
 
         guard event.getIntegerValueField(.keyboardEventKeycode) == Self.escapeKeyCode else {
+            if type == .keyDown && isKeyHeld {
+                DispatchQueue.main.async { self.onOtherKeyWhileHeld?() }
+            }
             return Unmanaged.passUnretained(event)
         }
 
