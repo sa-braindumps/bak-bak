@@ -87,6 +87,22 @@ public final class Injector: @unchecked Sendable {
         }
     }
 
+    /// Select text backward from the cursor by posting Shift+LeftArrow `count`
+    /// times. Used by the "select that" / "select last sentence" voice command
+    /// to highlight the just-injected text.
+    public func selectBackward(count: Int) {
+        let leftArrow: CGKeyCode = 123
+        for _ in 0..<count {
+            let downEvent = CGEvent(keyboardEventSource: nil, virtualKey: leftArrow, keyDown: true)
+            downEvent?.flags = .maskShift
+            downEvent?.post(tap: .cgAnnotatedSessionEventTap)
+
+            let upEvent = CGEvent(keyboardEventSource: nil, virtualKey: leftArrow, keyDown: false)
+            upEvent?.flags = .maskShift
+            upEvent?.post(tap: .cgAnnotatedSessionEventTap)
+        }
+    }
+
     /// Check if Accessibility permission is granted.
     public func isAccessibilityGranted() -> Bool {
         AXIsProcessTrusted()

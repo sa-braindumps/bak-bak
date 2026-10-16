@@ -203,11 +203,8 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func removeVocabEntry(heard: String) {
-        if var profile = try? profileStore.read() {
-            profile.vocab.removeValue(forKey: heard)
-            try? profileStore.write(profile)
-            vocab = profile.vocab
-        }
+        try? profileStore.removeVocabEntry(heard: heard)
+        vocab.removeValue(forKey: heard)
     }
 
     func deleteEntry(timestamp: String, raw: String) {

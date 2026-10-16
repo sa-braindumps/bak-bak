@@ -8,7 +8,7 @@ struct BakBakCLI: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "bak-bak",
         abstract: "Voice dictation with vocabulary that persists and compounds.",
-        subcommands: [Setup.self, Doctor.self, Vocab.self, History.self],
+        subcommands: [Setup.self, Doctor.self, Vocab.self, Snippet.self, History.self],
         defaultSubcommand: Doctor.self
     )
 }
@@ -16,7 +16,7 @@ struct BakBakCLI: ParsableCommand {
 // MARK: - App mode
 
 let arguments = CommandLine.arguments
-let isCLI = arguments.count > 1 && ["setup", "doctor", "vocab", "history", "--help", "-h"].contains(arguments[1])
+let isCLI = arguments.count > 1 && ["setup", "doctor", "vocab", "snippet", "history", "--help", "-h"].contains(arguments[1])
 
 if isCLI {
     BakBakCLI.main()

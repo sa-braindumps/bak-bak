@@ -106,9 +106,42 @@ public final class AppCoordinator: @unchecked Sendable {
         Task {
             do {
                 let result = try await transcriber.transcribe(audioData: audioData)
+                let rawText = result.text
+
+                // ── Interception seam (SPEC §7) ───────────────────────────────
+                // If the correction/command window is open, the next utterance
+                // is first tested as an editing command, then as a voice
+                // correction. If handled, execute it and return early — do NOT
+                // inject it as normal text.
+                if let controller = correctionController, controller.isWindowOpen {
+                    if let command = CommandGrammar.parse(rawText) {
+                        if let status = controller.processCommand(command) {
+                            history.append(raw: rawText, corrected: status, latencyMs: result.latencyMs, injectionMethod: "command")
+                            completion(.success(status))
+                            return
+                        }
+                    }
+                    if let correction = controller.processUtterance(rawText), correction.learned {
+                        let status = "learned: \(correction.rewriteText ?? rawText)"
+                        history.append(raw: rawText, corrected: status, latencyMs: result.latencyMs, injectionMethod: "correction")
+                        completion(.success(status))
+                        return
+                    }
+                    // No command/correction matched — fall through to normal path.
+                    // (processUtterance already closed the window on a non-match.)
+                }
+
+                // ── Normal path ───────────────────────────────────────────────
+                // rawText → DisfluencyFilter (if enabled) → Substitutor(vocab)
+                //         → SnippetExpander(snippets) → inject → history.
                 let profile = try? profileStore.read()
                 let vocab = profile?.vocab ?? [:]
-                let correctedText = Substitutor.apply(result.text, vocab: vocab)
+                let snippets = profile?.snippets ?? [:]
+                let removeFillers = profile?.removeFillers ?? false
+
+                let cleaned = removeFillers ? DisfluencyFilter.apply(rawText) : rawText
+                let substituted = Substitutor.apply(cleaned, vocab: vocab)
+                let correctedText = SnippetExpander.apply(substituted, snippets: snippets)
 
                 let injectionResult = injector.inject(correctedText)
                 let method: String
@@ -117,16 +150,17 @@ public final class AppCoordinator: @unchecked Sendable {
                 case .failure(let r): method = "failed:\(r)"
                 }
 
-                history.append(raw: result.text, corrected: correctedText, latencyMs: result.latencyMs, injectionMethod: method)
+                history.append(raw: rawText, corrected: correctedText, latencyMs: result.latencyMs, injectionMethod: method)
 
                 switch injectionResult {
                 case .inserted:
+                    // Only open the window when text actually landed — otherwise
+                    // "scratch that" would backspace text we never typed.
+                    correctionController?.openWindow(afterInjectionLength: correctedText.count)
                     completion(.success(correctedText))
                 case .failure(let reason):
                     completion(.failure(NSError(domain: "bak-bak", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])))
                 }
-
-                correctionController?.openWindow(afterInjectionLength: correctedText.count)
             } catch {
                 completion(.failure(error))
             }

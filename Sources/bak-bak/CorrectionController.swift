@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Pipeline
 
 /// Manages the 10-second correction window after each injection.
@@ -15,7 +15,24 @@ public final class CorrectionController {
     private var correctionWindowStart: Date?
     private var windowDuration: TimeInterval
     private var priorInjectionLength: Int?
-    private var isWindowOpen = false
+    private var windowOpen = false
+    /// The app the text was injected into. If the user has switched apps since,
+    /// we treat the injection length as unknown (SPEC §7.5).
+    private var injectionTargetPID: pid_t?
+    /// Bumped on every open so an older window's close timer can't cut a newer
+    /// window short.
+    private var windowGeneration = 0
+
+    /// Whether the correction/command window is currently open.
+    public var isWindowOpen: Bool { windowOpen }
+
+    /// The length of the just-injected text, if known (nil after focus change
+    /// or once the window has closed). Drives the §7.5 safety rule.
+    public var lastInjectionLength: Int? {
+        guard let pid = injectionTargetPID,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return nil }
+        return priorInjectionLength
+    }
 
     public init(profileStore: ProfileStore, injector: Injector) {
         self.profileStore = profileStore
@@ -27,25 +44,65 @@ public final class CorrectionController {
     /// Open the correction window after an injection.
     public func openWindow(afterInjectionLength length: Int) {
         priorInjectionLength = length
+        injectionTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         correctionWindowStart = Date()
-        isWindowOpen = true
+        windowOpen = true
+        windowGeneration += 1
 
-        // Auto-close after window duration
+        let generation = windowGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + windowDuration) { [weak self] in
-            self?.closeWindow()
+            guard let self, self.windowGeneration == generation else { return }
+            self.closeWindow()
         }
     }
 
     /// Close the correction window.
     public func closeWindow() {
-        isWindowOpen = false
+        windowOpen = false
         priorInjectionLength = nil
+        injectionTargetPID = nil
         correctionWindowStart = nil
+    }
+
+    /// Execute a parsed voice editing command against the just-injected text.
+    /// Returns a short status string for the menu bar/overlay, or `nil` if the
+    /// window is closed (so the caller falls through to normal dictation).
+    ///
+    /// Safety (SPEC §7.5): `.scratchThat` and `.selectLast` are **no-ops** when
+    /// the prior injection length is unknown (e.g. focus changed) — we never
+    /// backspace or select blindly into the user's surrounding text.
+    public func processCommand(_ command: CommandGrammar.Command) -> String? {
+        guard windowOpen else { return nil }
+
+        let priorLength = lastInjectionLength
+
+        switch command {
+        case .scratchThat:
+            if let length = priorLength, length > 0 {
+                injector.sendBackspaces(count: length)
+            }
+            // Unknown length → no-op (never backspace blindly).
+        case .newLine(let n):
+            injector.typeCharacters(String(repeating: "\n", count: n))
+        case .selectLast:
+            if let length = priorLength, length > 0 {
+                injector.selectBackward(count: length)
+            }
+            // Unknown length → no-op (never select blindly).
+        }
+
+        closeWindow()
+
+        switch command {
+        case .scratchThat: return "scratched"
+        case .newLine: return "new line"
+        case .selectLast: return "selected"
+        }
     }
 
     /// Check if the window is open and process a potential correction.
     public func processUtterance(_ utterance: String) -> CorrectionResult? {
-        guard isWindowOpen else { return nil }
+        guard windowOpen else { return nil }
 
         // Try to parse as a correction
         guard let correction = CorrectionGrammar.parse(utterance) else {
@@ -56,13 +113,13 @@ public final class CorrectionController {
 
         // Write the correction to vocab
         do {
-            try profileStore.addVocabEntry(heard: correction.heard, intended: correction.intended)
+            try profileStore.addVocabEntry(heard: correction.heard, intended: correction.intended, learnedAt: Date())
         } catch {
             return CorrectionResult(learned: false, rewriteText: nil)
         }
 
         // Perform in-place rewrite if we have the prior injection length
-        if let priorLength = priorInjectionLength {
+        if let priorLength = lastInjectionLength {
             // Backspace-delete the prior text
             injector.sendBackspaces(count: priorLength)
             // Type the corrected text (with the new vocab entry applied)

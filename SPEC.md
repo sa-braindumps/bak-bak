@@ -243,6 +243,18 @@ rack bak       Bak-Bak
 
 This command is the proof that there is **no hidden state** — what the app knows is exactly what this prints, which is exactly what is in the file.
 
+### 4.5 `bak-bak snippet`
+
+Manages the `[snippets]` table (§5.1b). Three subcommands, all comment-preserving (TOMLKit), all taking effect on the next dictation with no restart:
+
+- **`bak-bak snippet add "<trigger>" "<expansion>"`** — appends or updates `"<trigger>" = "<expansion>"`. Two positional arguments, both quoted (they may contain spaces; `<expansion>` may be multi-line). If `<trigger>` exists, its value is updated in place.
+  **Output:** `added: "my email" → "you@example.com"`
+- **`bak-bak snippet list`** — pretty-prints the current `[snippets]` table in two columns (multi-line expansions show their first line with an ellipsis). Read-only.
+- **`bak-bak snippet remove "<trigger>"`** — removes the entry for `<trigger>`. No-op if absent.
+  **Output:** `removed: "my email"`
+
+Like `vocab list`, `snippet list` is proof of no hidden state — it prints exactly what is in the file.
+
 ---
 
 ## 5. `profile.toml` specification
@@ -254,6 +266,14 @@ Location: `~/.bak-bak/profile.toml`. Format: TOML, edited via a **comment-preser
 | Key form | Type | Default | Constraints |
 |----------|------|---------|-------------|
 | `"<heard>" = "<intended>"` | string → string | `{}` (empty) | Keys matched case-insensitively, longest-first, on token boundaries. Values inserted verbatim. Learned entries are preceded by a `# learned <ISO-8601-Z>` comment. |
+
+### 5.1b `[snippets]`
+
+| Key form | Type | Default | Constraints |
+|----------|------|---------|-------------|
+| `"<trigger phrase>" = "<expansion>"` | string → string | `{}` (empty) | A spoken **whole utterance** matching `<trigger phrase>` is replaced by `<expansion>`. Matching is case-insensitive, trimmed, tolerant of a trailing punctuation mark, and longest-trigger-first. Embedded/mid-sentence expansion is **not** done (predictability). Expansions may be multi-line TOML strings (e.g. an address block). Like `[vocab]`, this is deterministic string replacement, not a model call. |
+
+The snippet stage runs **after** `[vocab]` substitution and **before** injection. Edit `[snippets]` by hand or via `bak-bak snippet` (§4.5); it is read fresh per dictation, so changes take effect on the next dictation with no restart.
 
 ### 5.2 `[style]`
 
@@ -273,9 +293,17 @@ Location: `~/.bak-bak/profile.toml`. Format: TOML, edited via a **comment-preser
 |-----|------|---------|-------------|
 | `correction_window_secs` | integer | `10` | The named constant for the voice-correction window. Configurable so power users can shorten/lengthen it. `0` disables voice correction (vocabulary still applies; the window simply never opens). |
 
+### 5.4b `[cleanup]`
+
+| Key | Type | Default | Constraints |
+|-----|------|---------|-------------|
+| `remove_fillers` | bool | `false` | When `true`, a fixed set of disfluency tokens (`um, umm, uh, uhh, erm, er, ah, hmm, mm`) is stripped from the raw transcript as **whole tokens only** (case-insensitive), spacing/punctuation is tidied, and a leading-filler-stripped first letter is re-capitalized. This is deterministic string surgery — not a model call. Real words (`like`, `so`, `you know`) are never removed, and substrings are never gutted (`summary` keeps its `um`). Off by default. |
+
+The cleanup stage runs on the raw transcript **before** `[vocab]` substitution, so vocabulary still matches the cleaned text. Unknown keys in `[cleanup]` are preserved on write (this table is an extension point).
+
 ### 5.5 Defaults and constraints summary
 
-- A **missing file** is equivalent to: empty `[vocab]`, no `[style].seed`, `[hotkey].trigger = "option"`, `[correction].correction_window_secs = 10`. The app creates the file on first `setup`.
+- A **missing file** is equivalent to: empty `[vocab]`, empty `[snippets]`, no `[style].seed`, `[hotkey].trigger = "option"`, `[correction].correction_window_secs = 10`, `[cleanup].remove_fillers = false`. The app creates the file on first `setup`.
 - A **malformed file** does not block dictation (raw transcript is injected) and surfaces in the error state and `bak-bak doctor`.
 - **Comments are load-bearing**: the `# learned <timestamp>` comments are how `doctor` reconstructs correction history. There is no separate `corrections.log` — history lives in these comments. This is why the TOML writer **must** preserve comments.
 
@@ -291,6 +319,20 @@ Location: `~/.bak-bak/profile.toml`. Format: TOML, edited via a **comment-preser
 # Example (uncomment or copy your own):
 # "cube cuttle" = "kubectl"
 # "nicks"       = "Nginx"
+
+[snippets]
+# Speak a whole trigger phrase, get the expansion. Whole-utterance only.
+# Format:  "trigger phrase" = "expansion text"
+# Example (uncomment or copy your own):
+# "my email"   = "you@example.com"
+# "my address" = """
+# 123 Main St
+# Springfield
+# """
+
+[cleanup]
+# Deterministic filler removal (um, uh, erm, …). Off by default.
+remove_fillers = false
 
 [style]
 # Reserved for optional LLM cleanup (v0.3). Ignored in v0.1.
@@ -381,6 +423,23 @@ If the length of the prior injection **cannot be determined** — most commonly 
 
 - The learned correction (next dictation is right) is a **guarantee**.
 - The in-place rewrite of the current text is **best-effort** and may be skipped (§7.5) or imperfect in unusual editors.
+
+### 7.7 Voice editing commands
+
+During the same correction window (§7.1), the next utterance is also tested against a small set of **deterministic editing commands** *before* it is tested as a correction or treated as normal dictation. These are whole-utterance matches, case-insensitive, tolerant of a trailing punctuation mark; anything that does not match falls through to the correction grammar and then to normal dictation. Parsing lives in `Sources/Pipeline/CommandGrammar.swift` (mirroring `CorrectionGrammar`).
+
+| Utterance | Action |
+|-----------|--------|
+| `scratch that` / `delete that` / `undo that` | Backspace-delete the just-injected text. |
+| `new line` | Type one newline. |
+| `new paragraph` | Type two newlines. |
+| `select that` / `select last sentence` | Select the just-injected text backward (Shift+LeftArrow ×N). |
+
+The interception order in the correction window is: **editing command → voice correction → normal dictation**. The first match wins and short-circuits; a handled command/correction is **not** injected as normal text.
+
+**Safety (the §7.5 rule applies).** `scratch that` and `select that` operate over the prior-injection length tracked by `CorrectionController`. If that length is unknown (e.g. focus changed), they are **no-ops** — Bak-Bak never backspaces or selects blindly into the user's surrounding text. `new line` / `new paragraph` only append, so they are always safe.
+
+(Rewrite-by-meaning commands such as "make that more formal" are **not** part of v0.1 — they require the LLM cleanup layer and are deferred.)
 
 ---
 
