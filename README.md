@@ -13,11 +13,12 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 - Can strip "um", "uh" and similar filler words. Off by default.
 - Pick your own shortcut (Control+Option, Command+Option, and so on).
 - Hold the keys to record, or switch to toggle mode: press once to start, again to stop.
+- Press Esc to cancel a recording. Nothing gets sent to OpenAI and nothing is typed. The Esc doesn't leak through to the app you're in, so it won't close a dialog or stop a terminal command. You can also cancel from the menu bar.
 - Keeps a history of every dictation in `~/.bak-bak/history.jsonl`.
 - A dashboard window with your history, usage stats, dictionary and settings.
 - Optional sounds when recording starts and stops.
 - Uses `gpt-4o-mini-transcribe` with a language hint to cut down on made-up text when you're quiet.
-- A small floating pill with a live waveform while you talk. Recording stops on its own after 60 seconds.
+- A small floating pill with a live waveform while you talk. Recording stops on its own after 60 seconds. If you're holding the keys, what you said still gets typed. In toggle mode it's thrown away, because by then you've probably forgotten it was on.
 - Compresses audio to FLAC before upload so it's smaller and faster (falls back to WAV).
 - Throws away recordings that are just silence.
 - Can launch at login.
@@ -46,6 +47,7 @@ The first time it runs, macOS will ask for **Microphone** and **Accessibility** 
 | Action | How |
 |--------|-----|
 | Dictate | Hold **Control+Option**, speak, let go (or in toggle mode, press once to start and again to stop) |
+| Cancel | Press Esc while recording, or menu bar → Cancel Recording |
 | Correct a word | Right after a dictation, say "no, X is Y" or "correction: X is Y" |
 | Undo, new line, select | Right after a dictation, say "scratch that", "new line", "new paragraph" or "select that" |
 | Add a snippet | `bak-bak snippet add "my email" "you@example.com"` |

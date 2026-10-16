@@ -85,10 +85,13 @@ Each feature lists **Behavior**, **Edge cases**, and **Failure modes**. The diff
 **Behavior.** Holding `⌥` (Option, configurable via `[hotkey].trigger`) starts recording. The menu bar shows the recording state while the key is held. Releasing `⌥` stops recording and begins transcription. This is a *hold-and-release* gesture — not a toggle — so the user always knows recording is active because their finger is on the key.
 
 **Edge cases.**
-- **Tap with no speech.** A keyDown/keyUp with a buffer shorter than ~300 ms is discarded silently — no API call, no error. Prevents accidental empty Whisper requests when `⌥` is used for its normal OS purpose.
+- **Tap with no speech.** In hold mode, a press shorter than 300 ms stops the mic and discards the audio silently — no API call, no error. Prevents accidental empty Whisper requests when `⌥` is used for its normal OS purpose.
+- **Cancel.** While recording (either mode), **Esc** or the menu's *Cancel Recording* stops the mic and discards the audio: no API call, nothing injected, the overlay shows "Cancelled". Esc is swallowed by an event tap so it does not also reach the frontmost app; if the tap can't be created, a passive monitor still cancels but the app sees the key too. Once audio has been sent, cancel does nothing.
+- **Hotkey during transcription.** Ignored. A new recording can start only after the previous one has been injected (or failed), so two runs can never inject out of order.
+- **Toggle mode.** `[hotkey].recording_mode = "toggle"`: press once to start, again to stop and transcribe. Same cancel, cap and overlap rules. The rules live in one place, `Sources/Pipeline/RecordingStateMachine.swift`.
 - **`⌥` used in another shortcut.** Bak-Bak detects modifier-only press/release. If `⌥` is pressed *together with another key* (e.g. `⌥→` to move by word), it is not treated as a recording gesture — the combined event passes through untouched.
 - **Key held across app switch.** Recording continues; the transcript is injected wherever the cursor lands on release. (The user chose where to release.)
-- **Key held very long.** No artificial cap in v0.1, but the RAM buffer is monitored; see Failure modes.
+- **60-second cap.** Recording stops at 60 s (amber warning at 50 s). In hold mode the audio is transcribed, since holding the key that long is deliberate. In toggle mode it is discarded and the overlay shows "Stopped at 60s", since that is almost always a forgotten recording.
 
 **Failure modes.**
 - **Modifier-only detection proves flaky on some keyboards/layouts.** Documented fallback: a small Carbon `RegisterEventHotKey` registration. This is a last resort — the primary path is `CGEvent` tap + `NSEvent` global monitor.

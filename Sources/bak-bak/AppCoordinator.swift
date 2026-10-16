@@ -45,19 +45,20 @@ public final class AppCoordinator: @unchecked Sendable {
         self.correctionController = controller
     }
 
-    /// Start recording audio.
-    public func startRecording() {
+    /// Start recording audio. Throws if the mic can't be opened.
+    public func startRecording() throws {
         audioRecorder.onAutoStop = { [weak self] in
             self?.onAutoStop?()
         }
         audioRecorder.onNearLimit = { [weak self] in
             self?.onNearLimit?()
         }
-        do {
-            try audioRecorder.startRecording()
-        } catch {
-            // Error will be surfaced via callback
-        }
+        try audioRecorder.startRecording()
+    }
+
+    /// Stop recording and throw the audio away. Nothing is sent or typed.
+    public func cancelRecording() {
+        _ = audioRecorder.stopRecording()
     }
 
     /// Stop recording and process the audio.

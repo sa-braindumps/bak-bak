@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let profileStore = ProfileStore()
     private var dashboard: DashboardWindow?
     private var recordingStartDate: Date = Date()
+    private var session = RecordingStateMachine(mode: .hold)
+    private var cancelItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -22,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let profile = try? profileStore.read() {
             hotkeyMonitor.updateModifiers(from: profile.hotkeyModifiers)
-            hotkeyMonitor.recordingMode = profile.recordingMode
+            session.mode = RecordingStateMachine.Mode(configValue: profile.recordingMode)
         }
 
         setupStatusItem()
@@ -56,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupDurationCallbacks() {
         coordinator.onAutoStop = { [weak self] in
-            self?.handleRecordingStop()
+            self?.handle(.limitReached)
         }
         coordinator.onNearLimit = { [weak self] in
             self?.overlay.showNearLimit()
@@ -100,6 +102,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenu() {
         menu = NSMenu()
+        menu.autoenablesItems = false
+
+        cancelItem = NSMenuItem(title: "Cancel Recording (Esc)", action: #selector(cancelFromMenu), keyEquivalent: "")
+        cancelItem.target = self
+        cancelItem.isEnabled = false
+        menu.addItem(cancelItem)
+
+        menu.addItem(NSMenuItem.separator())
 
         let aboutItem = NSMenuItem(title: "About Bak-Bak", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
@@ -130,12 +140,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey
 
     private func setupHotkey() {
-        hotkeyMonitor.onRecordingStart = { [weak self] in
-            self?.handleRecordingStart()
+        hotkeyMonitor.onHotkeyDown = { [weak self] in
+            self?.handle(.hotkeyDown)
         }
-
-        hotkeyMonitor.onRecordingStop = { [weak self] in
-            self?.handleRecordingStop()
+        hotkeyMonitor.onHotkeyUp = { [weak self] heldFor in
+            self?.handle(.hotkeyUp(heldFor: heldFor))
+        }
+        hotkeyMonitor.onEscape = { [weak self] in
+            self?.handle(.cancel)
         }
 
         hotkeyMonitor.start()
@@ -149,19 +161,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func recordingModeDidChange(_ notification: Notification) {
         if let mode = notification.userInfo?["mode"] as? String {
-            hotkeyMonitor.recordingMode = mode
-            hotkeyMonitor.resetToggleState()
+            session.mode = RecordingStateMachine.Mode(configValue: mode)
         }
+    }
+
+    @objc private func cancelFromMenu() {
+        handle(.cancel)
+    }
+
+    /// Every recording input goes through here. The state machine decides what
+    /// it means; this just carries out the action. Main thread only.
+    private func handle(_ event: RecordingStateMachine.Event) {
+        let action = session.handle(event)
+
+        switch action {
+        case .none:
+            break
+        case .start:
+            handleRecordingStart()
+        case .stopAndTranscribe:
+            handleRecordingStop()
+        case .discard(let reason):
+            handleRecordingDiscard(reason)
+        }
+
+        let isRecording = session.phase == .recording
+        hotkeyMonitor.isCapturingEscape = isRecording
+        cancelItem.isEnabled = isRecording
     }
 
     private func handleRecordingStart() {
         recordingStartDate = Date()
+        do {
+            try coordinator.startRecording()
+        } catch {
+            handle(.cancel)
+            overlay.showError("Couldn't start the mic")
+            updateStatusItem(state: .error("Couldn't start the mic: \(error.localizedDescription)"))
+            return
+        }
         if (try? profileStore.read())?.soundEnabled != false {
             NSSound(named: "Tink")?.play()
         }
-        coordinator.startRecording()
         updateStatusItem(state: .recording)
         overlay.show()
+    }
+
+    private func handleRecordingDiscard(_ reason: RecordingStateMachine.DiscardReason) {
+        coordinator.cancelRecording()
+        updateStatusItem(state: .idle)
+        switch reason {
+        case .cancelled:
+            overlay.showDiscarded("Cancelled")
+        case .tooShort:
+            overlay.hide()
+        case .limitReached:
+            overlay.showDiscarded("Stopped at 60s")
+        }
     }
 
     private func handleRecordingStop() {
@@ -173,36 +229,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.overlay.showTranscribing(recordingDuration: duration)
             },
             completion: { [weak self] result in
-                guard let self = self else { return }
-                self.hotkeyMonitor.resetToggleState()
-                switch result {
-                case .success(let text):
-                    self.overlay.showDone(text: text)
-                    self.updateStatusItem(state: .idle)
-                case .failure(let error):
-                    if let coordError = error as? AppCoordinator.CoordinatorError,
-                       coordError == .silenceDetected {
-                        self.overlay.showDiscarded()
-                        self.updateStatusItem(state: .idle)
-                    } else if let coordError = error as? AppCoordinator.CoordinatorError,
-                              coordError == .emptyRecording {
-                        self.overlay.hide()
-                        self.updateStatusItem(state: .idle)
-                    } else {
-                        let msg = error.localizedDescription
-                        if !msg.isEmpty {
-                            self.overlay.showError(msg)
-                        } else {
-                            self.overlay.hide()
-                        }
-                        self.updateStatusItem(state: .error(msg))
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                            self.updateStatusItem(state: .idle)
-                        }
-                    }
-                }
+                DispatchQueue.main.async { self?.handleRecordingResult(result) }
             }
         )
+    }
+
+    private func handleRecordingResult(_ result: Result<String, Error>) {
+        handle(.finished)
+
+        switch result {
+        case .success(let text):
+            overlay.showDone(text: text)
+            updateStatusItem(state: .idle)
+        case .failure(AppCoordinator.CoordinatorError.silenceDetected):
+            overlay.showDiscarded()
+            updateStatusItem(state: .idle)
+        case .failure(AppCoordinator.CoordinatorError.emptyRecording):
+            overlay.hide()
+            updateStatusItem(state: .idle)
+        case .failure(let error):
+            let msg = error.localizedDescription
+            if !msg.isEmpty {
+                overlay.showError(msg)
+            } else {
+                overlay.hide()
+            }
+            updateStatusItem(state: .error(msg))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                // Don't clobber the icon of a recording that started since.
+                guard let self, self.session.phase == .idle else { return }
+                self.updateStatusItem(state: .idle)
+            }
+        }
     }
 
     private func playReleaseSound() {

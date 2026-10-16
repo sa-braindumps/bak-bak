@@ -9,7 +9,8 @@ final class RecordingOverlay {
     private let viewModel = OverlayViewModel()
     
     func show() {
-        guard window == nil else { return }
+        // Always reset to the recording state, even if the previous run's
+        // "done" pill is still on screen.
         setState(.recording)
     }
     
@@ -33,8 +34,11 @@ final class RecordingOverlay {
         setState(.transcribing)
     }
     
-    func showDiscarded() {
-        setState(.discarded)
+    func showDiscarded(_ message: String = "No speech") {
+        DispatchQueue.main.async { [weak self] in
+            self?.viewModel.discardedMessage = message
+            self?.applyState(.discarded)
+        }
     }
     
     func showNearLimit() {
@@ -165,6 +169,7 @@ final class OverlayViewModel: ObservableObject {
     var overallLevel: Float { bands.max() ?? 0 }
     @Published var doneText: String = ""
     @Published var errorMessage: String = ""
+    @Published var discardedMessage: String = "No speech"
     @Published var recordingDuration: TimeInterval = 0
     @Published var transcribingStartDate: Date?
     
@@ -360,7 +365,7 @@ struct OverlayPillView: View {
             }
             .frame(width: 24)
             
-            Text("No speech")
+            Text(viewModel.discardedMessage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.gray)
             Spacer(minLength: 0)
