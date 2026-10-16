@@ -7,6 +7,10 @@ public final class CorrectionController {
 
     public struct CorrectionResult {
         public let learned: Bool
+        public let heard: String
+        public let intended: String
+        /// The fixed text that replaced the original on screen, or nil if the
+        /// rewrite was skipped (focus changed) and only the vocab was updated.
         public let rewriteText: String?
     }
 
@@ -14,7 +18,8 @@ public final class CorrectionController {
     private let injector: Injector
     private var correctionWindowStart: Date?
     private var windowDuration: TimeInterval
-    private var priorInjectionLength: Int?
+    /// The text typed by the last dictation, while the window is open.
+    private var lastInjectedText: String?
     private var windowOpen = false
     /// The app the text was injected into. If the user has switched apps since,
     /// we treat the injection length as unknown (SPEC §7.5).
@@ -31,7 +36,7 @@ public final class CorrectionController {
     public var lastInjectionLength: Int? {
         guard let pid = injectionTargetPID,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return nil }
-        return priorInjectionLength
+        return lastInjectedText?.count
     }
 
     public init(profileStore: ProfileStore, injector: Injector) {
@@ -41,9 +46,9 @@ public final class CorrectionController {
         self.windowDuration = TimeInterval(profile?.correctionWindowSecs ?? 10)
     }
 
-    /// Open the correction window after an injection.
-    public func openWindow(afterInjectionLength length: Int) {
-        priorInjectionLength = length
+    /// Open the correction window after `text` was typed.
+    public func openWindow(afterInjecting text: String) {
+        lastInjectedText = text
         injectionTargetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         correctionWindowStart = Date()
         windowOpen = true
@@ -59,7 +64,7 @@ public final class CorrectionController {
     /// Close the correction window.
     public func closeWindow() {
         windowOpen = false
-        priorInjectionLength = nil
+        lastInjectedText = nil
         injectionTargetPID = nil
         correctionWindowStart = nil
     }
@@ -100,39 +105,39 @@ public final class CorrectionController {
         }
     }
 
-    /// Check if the window is open and process a potential correction.
+    /// If `utterance` is a correction of the last dictation ("no, X is Y"),
+    /// learn X → Y and fix the text on screen. Returns nil (and closes the
+    /// window) when it isn't, so the caller treats it as normal dictation.
     public func processUtterance(_ utterance: String) -> CorrectionResult? {
-        guard windowOpen else { return nil }
+        guard windowOpen, let lastText = lastInjectedText else { return nil }
 
-        // Try to parse as a correction
-        guard let correction = CorrectionGrammar.parse(utterance) else {
-            // Not a correction — close window and return nil
+        guard let correction = CorrectionGrammar.parse(utterance, lastText: lastText) else {
             closeWindow()
             return nil
         }
 
-        // Write the correction to vocab
         do {
             try profileStore.addVocabEntry(heard: correction.heard, intended: correction.intended, learnedAt: Date())
         } catch {
-            return CorrectionResult(learned: false, rewriteText: nil)
+            closeWindow()
+            return CorrectionResult(learned: false, heard: correction.heard, intended: correction.intended, rewriteText: nil)
         }
 
-        // Perform in-place rewrite if we have the prior injection length
-        if let priorLength = lastInjectionLength {
-            // Backspace-delete the prior text
-            injector.sendBackspaces(count: priorLength)
-            // Type the corrected text (with the new vocab entry applied)
-            let correctedText = Substitutor.apply(utterance, vocab: (try? profileStore.read())?.vocab ?? [:])
-            injector.typeCharacters(correctedText)
-        } else {
-            // Focus changed — skip delete, just inject the corrected text
-            let correctedText = Substitutor.apply(utterance, vocab: (try? profileStore.read())?.vocab ?? [:])
-            _ = injector.inject(correctedText)
+        // Retype the *original* text with the new rule applied. If focus has
+        // moved we can't safely backspace, so the fix only applies from the
+        // next dictation on (SPEC §7.5).
+        var rewritten: String?
+        if let length = lastInjectionLength {
+            let fixed = Substitutor.apply(lastText, vocab: [correction.heard: correction.intended])
+            if fixed != lastText {
+                injector.sendBackspaces(count: length)
+                injector.typeCharacters(fixed)
+                rewritten = fixed
+            }
         }
 
         closeWindow()
-        return CorrectionResult(learned: true, rewriteText: utterance)
+        return CorrectionResult(learned: true, heard: correction.heard, intended: correction.intended, rewriteText: rewritten)
     }
 
     /// Check if a term was heard (for auto-correction during normal dictation).

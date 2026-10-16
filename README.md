@@ -7,7 +7,7 @@ Hold **Control+Option**, speak, and let go. What you said gets typed wherever yo
 ## What it does
 
 - Types into pretty much anything: browsers, Electron apps, regular Mac text fields.
-- Learns your words. Say "no, X is Y" right after a dictation and that fix is applied every time after.
+- Learns your words. Say "no, X is Y" right after a dictation and it fixes the text it just typed, then applies that fix every time after. X has to be something it actually just typed, so a normal sentence like "actually the meeting is at 3pm" still gets typed as-is.
 - Snippets. Say "my email" on its own and it types your full email address. Good for addresses, sign-offs, anything you type a lot.
 - Voice commands for a few seconds after each dictation: "scratch that" deletes what was just typed, "new line" and "new paragraph" add line breaks, and "select that" highlights it.
 - Can strip "um", "uh" and similar filler words. Off by default.

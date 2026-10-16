@@ -79,4 +79,11 @@ final class SubstitutorTests: XCTestCase {
         let result = Substitutor.apply("run kubectl get pods", vocab: vocab)
         XCTAssertEqual(result, "run kubectl get pods")
     }
+
+    func testCorrectionRewriteFixesOriginalText() {
+        // Regression: the voice-correction rewrite used to retype the
+        // correction phrase ("no, kubectl is kubectl") instead of the original.
+        let original = "Run Cube Cuttle get pods."
+        XCTAssertEqual(Substitutor.apply(original, vocab: ["cube cuttle": "kubectl"]), "Run kubectl get pods.")
+    }
 }

@@ -5,6 +5,11 @@ import Foundation
 ///   - "no, X is Y"
 ///   - "correction: X is Y"
 ///   - "actually X is Y"
+///
+/// Ordinary speech starts with "no" or "actually" all the time ("Actually the
+/// meeting is at 3pm"), so a match also has to look like a word fix: X and Y
+/// are short, X isn't just a pronoun, and X appears in the text that was just
+/// typed. Anything else is treated as normal dictation.
 public struct CorrectionGrammar {
 
     public struct Correction: Sendable, Equatable {
@@ -26,18 +31,52 @@ public struct CorrectionGrammar {
 
     private static let connective = " is "
 
+    /// Longest X or Y, in words, that still reads as a vocabulary fix.
+    public static let maxWords = 4
+
+    /// A lone pronoun is never the misheard word ("no, it is fine").
+    private static let pronouns: Set<String> = [
+        "it", "that", "this", "there", "he", "she", "they", "we", "i", "you", "what",
+    ]
+
     /// Parse an utterance against correction grammars.
     /// Returns a `Correction` if it matches, `nil` if it's a normal dictation.
-    public static func parse(_ utterance: String) -> Correction? {
+    ///
+    /// - Parameter lastText: the text that was just typed. When given, X must
+    ///   appear in it as whole words (case-insensitive).
+    public static func parse(_ utterance: String, lastText: String? = nil) -> Correction? {
         let trimmed = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
 
         for pattern in patterns {
-            if let correction = tryPattern(pattern, on: trimmed) {
-                return correction
-            }
+            guard let correction = tryPattern(pattern, on: trimmed) else { continue }
+            guard looksLikeWordFix(correction) else { return nil }
+            if let lastText, !containsWords(lastText, correction.heard) { return nil }
+            return correction
         }
 
         return nil
+    }
+
+    private static func looksLikeWordFix(_ correction: Correction) -> Bool {
+        let heardWords = correction.heard.split(whereSeparator: \.isWhitespace)
+        let intendedWords = correction.intended.split(whereSeparator: \.isWhitespace)
+        guard heardWords.count <= maxWords, intendedWords.count <= maxWords else { return false }
+        if heardWords.count == 1, pronouns.contains(correction.heard.lowercased()) { return false }
+        return correction.heard.lowercased() != correction.intended.lowercased()
+    }
+
+    private static func containsWords(_ text: String, _ phrase: String) -> Bool {
+        let pattern = "(?i)(?<![\\w])" + NSRegularExpression.escapedPattern(for: phrase) + "(?![\\w])"
+        return text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// Trim whitespace, trailing sentence punctuation and wrapping quotes, so
+    /// "Bak-Bak." becomes "Bak-Bak" (but "Node.js" is left alone).
+    private static func clean(_ s: String) -> String {
+        var out = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = out.last, ".,!?;:".contains(last) { out.removeLast() }
+        out = out.trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’"))
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func tryPattern(_ pattern: Pattern, on text: String) -> Correction? {
@@ -64,10 +103,8 @@ public struct CorrectionGrammar {
             let remainingLower = remaining.lowercased()
             guard let isRange = remainingLower.range(of: connective) else { continue }
 
-            let heard = String(remaining[remaining.startIndex..<isRange.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let intended = String(remaining[isRange.upperBound...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let heard = clean(String(remaining[remaining.startIndex..<isRange.lowerBound]))
+            let intended = clean(String(remaining[isRange.upperBound...]))
 
             guard !heard.isEmpty, !intended.isEmpty else { continue }
 

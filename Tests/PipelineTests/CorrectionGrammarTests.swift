@@ -101,6 +101,48 @@ final class CorrectionGrammarTests: XCTestCase {
     func testPunctuationStripping() {
         let result = CorrectionGrammar.parse("no, rack bak is Bak-Bak.")
         XCTAssertEqual(result?.heard, "rack bak")
-        XCTAssertEqual(result?.intended, "Bak-Bak.")
+        XCTAssertEqual(result?.intended, "Bak-Bak")
+    }
+
+    // MARK: - Must look like a word fix
+
+    func testEverydaySentenceIsNotACorrection() {
+        // Regression: this used to save "the meeting" → "at 3pm." to vocab.
+        XCTAssertNil(CorrectionGrammar.parse("Actually the meeting is at 3pm.", lastText: "Send the invite for Friday."))
+    }
+
+    func testHeardMustAppearInLastText() {
+        let last = "run cube cuttle get pods"
+        XCTAssertNotNil(CorrectionGrammar.parse("No, cube cuttle is kubectl.", lastText: last))
+        XCTAssertNil(CorrectionGrammar.parse("No, nicks is Nginx.", lastText: last))
+    }
+
+    func testHeardMatchesWholeWordsOnly() {
+        XCTAssertNil(CorrectionGrammar.parse("no, nick is Nginx", lastText: "ask the nickname"))
+        XCTAssertNotNil(CorrectionGrammar.parse("no, Nick is Nginx", lastText: "restart nick, then reload"))
+    }
+
+    func testLongSidesAreNotACorrection() {
+        XCTAssertNil(CorrectionGrammar.parse("no, the plan we agreed on yesterday is wrong"))
+        XCTAssertNil(CorrectionGrammar.parse("actually nicks is the thing we use for routing traffic"))
+    }
+
+    func testLonePronounIsNotACorrection() {
+        XCTAssertNil(CorrectionGrammar.parse("No, that is fine.", lastText: "is that fine"))
+        XCTAssertNil(CorrectionGrammar.parse("actually it is broken", lastText: "it works"))
+    }
+
+    func testSameOnBothSidesIsNotACorrection() {
+        XCTAssertNil(CorrectionGrammar.parse("no, kubectl is Kubectl", lastText: "kubectl get pods"))
+    }
+
+    func testDotInsideWordIsKept() {
+        XCTAssertEqual(CorrectionGrammar.parse("no, node js is Node.js")?.intended, "Node.js")
+    }
+
+    func testQuotesAreStripped() {
+        let result = CorrectionGrammar.parse("no, \"cube cuttle\" is \"kubectl\".")
+        XCTAssertEqual(result?.heard, "cube cuttle")
+        XCTAssertEqual(result?.intended, "kubectl")
     }
 }

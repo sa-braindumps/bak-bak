@@ -396,7 +396,15 @@ Exactly three patterns are recognized in v0.1. Each captures an `X` (the heard t
 | `correction: X is Y` | "correction cube cuttle is kubectl" | X=`cube cuttle`, Y=`kubectl` |
 | `actually X is Y` | "actually nicks is Nginx" | X=`nicks`, Y=`Nginx` |
 
-Matching is case-insensitive on the leading keyword and on the connective `is`. Leading punctuation/filler ("no," / "correction:" / "actually") is stripped. Everything between the keyword and ` is ` is `X`; everything after is `Y`. (How this parser is structured so contributors can add patterns is documented in [CONTRIBUTING §7](./docs/CONTRIBUTING.md#7-how-voice-correction-grammar-patterns-are-parsed).)
+Matching is case-insensitive on the leading keyword and on the connective `is`. Leading punctuation/filler ("no," / "correction:" / "actually") is stripped. Everything between the keyword and ` is ` is `X`; everything after is `Y`. Trailing sentence punctuation and wrapping quotes are trimmed from both (`Bak-Bak.` → `Bak-Bak`; a dot inside a word, as in `Node.js`, stays).
+
+People start ordinary sentences with "no" and "actually" all the time, so a pattern match only counts as a correction when it also looks like a word fix:
+
+- `X` and `Y` are each at most 4 words.
+- `X` is not a lone pronoun (`it`, `that`, `this`, …) and differs from `Y` beyond case.
+- `X` appears, as whole words and ignoring case, in the text that was just injected.
+
+"Actually the meeting is at 3pm" right after dictating "Send the invite for Friday" fails the last rule and is typed as normal dictation. (How this parser is structured so contributors can add patterns is documented in [CONTRIBUTING §7](./docs/CONTRIBUTING.md#7-how-voice-correction-grammar-patterns-are-parsed).)
 
 ### 7.3 Match vs no-match behavior
 
@@ -412,13 +420,13 @@ The rewrite uses **backspace-delete + retype**, *not* AXValue replacement:
 
 1. Compute the length of the text that was just injected (tracked by `CorrectionController` from the prior injection).
 2. Synthesize that many **backspace** keystrokes via `CGEvent` to delete the wrong text.
-3. Synthesize keystrokes to type the corrected text (raw transcript with the new `[vocab]` entry now applied).
+3. Synthesize keystrokes to type the corrected text: the **previously injected text** with the new `X → Y` entry applied. (Not the correction utterance. "run cube cuttle get pods" + "no, cube cuttle is kubectl" → "run kubectl get pods".)
 
 **Why backspace+retype and not AXValue.** Setting `AXValue` directly behaves differently across apps and causes artifacts in editors with vim mode, autocomplete, or custom text engines (text reordered, duplicated, or autocompletions triggered). Synthesized backspaces + typed characters are what a human would do and are universally compatible. This is the same reason §3.5's *correction* path does not reuse a naive AXValue set.
 
 ### 7.5 The "focus changed" safety rule
 
-If the length of the prior injection **cannot be determined** — most commonly because focus changed between the dictation and the correction — Bak-Bak **skips the delete step entirely** and injects only the corrected text. It must **never** issue backspaces blindly, because that would eat surrounding text the user did not dictate. Losing the in-place rewrite is acceptable; eating the user's other text is not. The `[vocab]` write still happens, so the flywheel is intact regardless.
+If the length of the prior injection **cannot be determined** — most commonly because focus changed between the dictation and the correction — Bak-Bak **skips the rewrite entirely**: nothing is deleted and nothing is typed (retyping the whole fixed text into whatever now has focus would just duplicate it somewhere else). Focus counts as changed when the frontmost app differs from the one the text was injected into. It must **never** issue backspaces blindly, because that would eat surrounding text the user did not dictate. Losing the in-place rewrite is acceptable; eating the user's other text is not. The `[vocab]` write still happens, so the flywheel is intact regardless.
 
 ### 7.6 Caveats (surface these to users verbatim)
 

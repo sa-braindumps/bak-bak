@@ -123,7 +123,7 @@ public final class AppCoordinator: @unchecked Sendable {
                         }
                     }
                     if let correction = controller.processUtterance(rawText), correction.learned {
-                        let status = "learned: \(correction.rewriteText ?? rawText)"
+                        let status = "learned: \(correction.heard) → \(correction.intended)"
                         history.append(raw: rawText, corrected: status, latencyMs: result.latencyMs, injectionMethod: "correction")
                         completion(.success(status))
                         return
@@ -157,7 +157,7 @@ public final class AppCoordinator: @unchecked Sendable {
                 case .inserted:
                     // Only open the window when text actually landed — otherwise
                     // "scratch that" would backspace text we never typed.
-                    correctionController?.openWindow(afterInjectionLength: correctedText.count)
+                    correctionController?.openWindow(afterInjecting: correctedText)
                     completion(.success(correctedText))
                 case .failure(let reason):
                     completion(.failure(NSError(domain: "bak-bak", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])))
