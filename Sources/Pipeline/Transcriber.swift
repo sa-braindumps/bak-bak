@@ -31,12 +31,15 @@ public final class Transcriber: @unchecked Sendable {
     }
 
     private let apiKey: String
+    private let prompt: String
     private let session: URLSession
     private let endpoint = "https://api.openai.com/v1/audio/transcriptions"
     public static let requestTimeout: TimeInterval = 30.0
 
-    public init(apiKey: String, session: URLSession = .shared) {
+    /// - Parameter prompt: context for the model; see `TranscriptionPrompt`.
+    public init(apiKey: String, prompt: String = TranscriptionPrompt.base, session: URLSession = .shared) {
         self.apiKey = apiKey
+        self.prompt = prompt
         self.session = session
     }
 
@@ -63,10 +66,11 @@ public final class Transcriber: @unchecked Sendable {
         body.append(Data("Content-Disposition: form-data; name=\"language\"\r\n\r\n".utf8))
         body.append(Data("en\r\n".utf8))
 
-        // Prompt — steers the model toward dictation-style output
+        // Prompt — steers the model toward dictation-style output and the
+        // user's vocabulary
         body.append(Data("--\(boundary)\r\n".utf8))
         body.append(Data("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n".utf8))
-        body.append(Data("Voice dictation.\r\n".utf8))
+        body.append(Data("\(prompt)\r\n".utf8))
 
         // Audio file — convert Float32 PCM to FLAC (falls back to WAV on failure)
         let audioFileData = convertToFLAC(audioData)

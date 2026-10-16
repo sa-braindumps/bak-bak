@@ -102,7 +102,12 @@ public final class AppCoordinator: @unchecked Sendable {
 
         onWillTranscribe?()
 
-        let transcriber = Transcriber(apiKey: apiKey)
+        let profileForPrompt = try? profileStore.read()
+        let prompt = TranscriptionPrompt.build(
+            vocab: profileForPrompt?.vocab ?? [:],
+            order: profileForPrompt?.vocabOrder ?? []
+        )
+        let transcriber = Transcriber(apiKey: apiKey, prompt: prompt)
 
         Task {
             do {

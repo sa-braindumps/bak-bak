@@ -8,6 +8,8 @@ public final class ProfileStore: @unchecked Sendable {
 
     public struct Profile: Codable {
         public var vocab: [String: String]
+        /// `[vocab]` keys in file order (oldest first). Empty if unknown.
+        public var vocabOrder: [String] = []
         public var snippets: [String: String]
         public var hotkeyModifiers: String
         public var recordingMode: String
@@ -111,7 +113,9 @@ public final class ProfileStore: @unchecked Sendable {
         }
         let raw = try String(contentsOf: fileURL, encoding: .utf8)
         let toml = try TOMLTable(string: raw)
-        return try parseProfile(toml)
+        var profile = try parseProfile(toml)
+        profile.vocabOrder = TOMLLineEditor(raw).keys(in: "vocab")
+        return profile
     }
 
     private func parseProfile(_ toml: TOMLTable) throws -> Profile {

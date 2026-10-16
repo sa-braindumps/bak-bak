@@ -117,6 +117,8 @@ Each feature lists **Behavior**, **Edge cases**, and **Failure modes**. The diff
 
 **Why deterministic replace and not Whisper `initial_prompt`.** Whisper's `initial_prompt` (prompt-priming) is best-effort and version-fragile — the same prompt yields different results across model versions and offers no guarantee a term is corrected. The flywheel is only worth shipping if a taught term is corrected *every time*. A deterministic replace from a file the user owns is that guarantee. Prompt-priming returns as an *optimization layer on top of* substitution in v0.2 (see [ROADMAP](./docs/ROADMAP.md)), never as a replacement for it.
 
+**Prompt-priming (shipped as that optimization layer).** Each request's `prompt` is `Voice dictation. Vocabulary: <terms>.`, where the terms are the *intended* values from `[vocab]`, newest first, deduplicated ignoring case and capped at 150 words (`Sources/Pipeline/TranscriptionPrompt.swift`). With an empty `[vocab]` the prompt is just `Voice dictation.`, as before. Measured on synthetic speech with `gpt-4o-mini-transcribe`: invented names went from wrong to right ("Zentrophy" → "Zentrafy", "Corvex" → "Quorvex"), common tech terms were already right without it, and a term spoken very differently from its spelling ("buck buck" for "Bak-Bak") was not fixed by priming. That last case is what substitution is for.
+
 **Matching rules.**
 - Case-insensitive on the "heard" key; the "intended" value is inserted verbatim (preserves `kubectl` lowercase, `Nginx` capitalization).
 - Matches respect token/word boundaries so `"nicks"` does not corrupt `"picnicks"`. Multi-word keys (`"cube cuttle"`) match across the space.
